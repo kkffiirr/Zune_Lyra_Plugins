@@ -1,0 +1,1505 @@
+diff --git a/backends/fs/windows/windows-fs.cpp b/backends/fs/windows/windows-fs.cpp
+index caf0e31360..a07d3af281 100644
+--- a/backends/fs/windows/windows-fs.cpp
++++ b/backends/fs/windows/windows-fs.cpp
+@@ -124,9 +124,13 @@ WindowsFilesystemNode::WindowsFilesystemNode() {
+ 
+ WindowsFilesystemNode::WindowsFilesystemNode(const Common::String &p, const bool currentDir) {
+ 	if (currentDir) {
++#ifdef _WIN32_WCE
++		_path = "\\";	// Windows CE has no current directory
++#else
+ 		char path[MAX_PATH];
+ 		GetCurrentDirectory(MAX_PATH, path);
+ 		_path = path;
++#endif
+ 	} else {
+ 		assert(p.size() > 0);
+ 		_path = p;
+diff --git a/backends/platform/zune/lyra.h b/backends/platform/zune/lyra.h
+new file mode 100755
+index 0000000000..341766b601
+--- /dev/null
++++ b/backends/platform/zune/lyra.h
+@@ -0,0 +1,159 @@
++#ifndef LYRA_H
++#define LYRA_H
++
++#include <windows.h>
++
++/* The Lyra mod runtime. Link `lyra_client.c`, and declare in your manifest:
++ *
++ *     "requires": ["lyra.mod_runtime"]
++ *
++ * Without that line the install gate cannot stop a platform too old to serve
++ * these calls, and they fail quietly at runtime instead. Every call is safe
++ * before the platform is up: it returns a failure value rather than faulting.
++ * See README.md for what the platform owns and what stays yours. */
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* ── state ───────────────────────────────────────────────────────────────────
++ * Slot keys are role-namespaced. "setting/<mod>/<id>" is INTENT, written by a
++ * control surface and read by you. "status/<mod>/<id>" is EFFECT, written by
++ * you and read by the HUD. You may only write your own status. */
++
++/* Current state of a slot, 0..N-1. -1 if the slot does not exist yet. */
++int    lyra_state_get(const char* key);
++
++/* Publish your own status and wake the UI. The platform stamps your pid, so a
++ * status resets to 0 if your process dies. Ignored for a non-"status/" key. */
++void   lyra_state_set_status(const char* key, int state);
++
++/* Write your own setting (intent), so a mod that cannot do what its toggle
++ * promises can switch itself off rather than leave the control lying. Prefer
++ * leaving intent to the user. Ignored for a non-"setting/" key. */
++void   lyra_state_set_setting(const char* key, int state);
++
++/* Wake every consumer without touching a slot, e.g. after publishing rows. */
++void   lyra_state_notify(void);
++
++/* Your wake event, created and registered on first call. Wait on it rather than
++ * polling: a toggle is a discrete act. The name must be unique to your daemon,
++ * e.g. L"zune-mod-state-evt-castd" - one event per mod, or an auto-reset wake
++ * will reach the wrong waiter. NULL if it cannot be created. */
++HANDLE lyra_state_change_event(const wchar_t* daemon_event_name);
++
++/* ── picker channel ──────────────────────────────────────────────────────────
++ * For a setting declaring `"context": {"kind": "select"}`. You publish the
++ * options; the user's choice comes back as the opaque token you supplied. */
++
++/* Buffer sizes the channel accepts, NUL included. Sizing your locals from these
++ * keeps you within what the platform stores; longer strings are truncated. */
++#define LYRA_CHANNEL_ROWS_MAX   8
++#define LYRA_CHANNEL_NAME_MAX   48   /* wchar_t, for a row's name and sub-label */
++#define LYRA_CHANNEL_VALUE_MAX  40   /* char, for your opaque selection token */
++#define LYRA_CHANNEL_SUBLABEL_MAX 64 /* wchar_t, for the quick-toggle sub-label */
++
++/* Every channel verb takes your setting's key. Nothing is bound per process, so
++ * two mods sharing a host (a load_module DLL in gemstone) cannot collide. */
++
++/* The event the picker signals when it opens, so you can rescan on demand. */
++HANDLE lyra_channel_scan_event(const char* toggle_key);
++
++/* Stage one row. `value` is yours: the picker hands it back verbatim on select.
++ * Staging is private until commit, so a partly-built list is never displayed.
++ * Returns 0 if idx is out of range. */
++int    lyra_channel_stage_row(const char* toggle_key, int idx, const wchar_t* name,
++                              const wchar_t* sub, const char* value);
++
++/* Publish the first `count` staged rows as the option list, and wake the UI. */
++void   lyra_channel_commit(const char* toggle_key, int count);
++
++/* Raise the picker yourself, rather than waiting for the user to open your
++   setting. Use it when the choice belongs to an action the user just took: stage
++   and commit your rows first, call this, and return. The picker is a HUD overlay
++   so it appears over whatever is on screen; it does not block, and the choice
++   arrives the same way as always, through lyra_channel_get_selection once the
++   user picks. Wait on lyra_state_change_event rather than polling for it. */
++void   lyra_channel_open(const char* toggle_key);
++
++/* Read back the published list, e.g. to merge a lossy rescan into it. */
++int    lyra_channel_row_count(const char* toggle_key);
++int    lyra_channel_get_row(const char* toggle_key, int idx,
++                            wchar_t* name_out, int name_cap,
++                            wchar_t* sub_out, int sub_cap,
++                            char* value_out, int value_cap);
++
++/* The user's current choice. Returns 1 if one is set, 0 if none. */
++int    lyra_channel_get_selection(const char* toggle_key, char* out, int out_cap);
++
++/* Set the choice yourself, e.g. after auto-picking a single device. */
++void   lyra_channel_set_selection(const char* toggle_key, const char* value);
++
++/* Override the quick-toggle row's sub-label with live text. A trailing ellipsis
++ * renders as the animated loading indicator. "" restores the state label. */
++void   lyra_channel_set_sublabel(const char* toggle_key, const wchar_t* text);
++
++/* ── kernel tools ────────────────────────────────────────────────────────────
++ * The addresses are yours; the mechanism behind these is Lyra's. That is the
++ * whole reason they are calls: relocate a helper or change how kernel access
++ * works and your mod keeps running, because it never compiled either in. */
++
++/* 1 once kernel access is available. Everything below returns a failure value
++ * until it is, so poll this at startup rather than assuming. */
++int    lyra_kernel_ready(void);
++
++/* Validate and, if needed, replant the kernel helpers. Cheap when they are
++ * intact. Call before a sequence of kernel work. 1 if usable. */
++int    lyra_kernel_ensure_helpers(void);
++
++DWORD  lyra_kreadu32(DWORD va);
++void   lyra_kread(DWORD va, void* buf, DWORD len);
++void   lyra_kmemcpy(DWORD va, const void* buf, DWORD len);
++
++/* Call a kernel function with up to six arguments; returns its r0. */
++DWORD  lyra_kcall(DWORD fn, DWORD a0, DWORD a1, DWORD a2,
++                  DWORD a3, DWORD a4, DWORD a5);
++
++/* Kernel proc-struct VA for a pid, for cross-process work. 0 if not found. */
++DWORD  lyra_find_proc_struct(DWORD pid);
++
++/* A kernel scratch word for functions that write an out-parameter: pass it as
++ * the pointer, then lyra_kreadu32 it back. Not reentrant; do not hold it. */
++DWORD  lyra_kscratch(void);
++
++/* Run the code at `code_va` in another process's context. `target_proc` comes
++ * from lyra_find_proc_struct. The address space switch is the platform's. */
++DWORD  lyra_kexec_in_proc(DWORD target_proc, DWORD code_va);
++
++/* Patch read-only code in another process. `target_proc` comes from
++ * lyra_find_proc_struct; len is 1..64. 0 on success. */
++int    lyra_patch_code(DWORD target_proc, DWORD target_va,
++                       const void* bytes, int len);
++
++/* Replace a function in your own process, keeping whoever else replaced it.
++ * `*out_next` receives what you must call to continue: the hook installed before
++ * yours, or the original function if you are the first. Take the target's
++ * arguments, return what it returns, and call through unless you fully handled
++ * the call.
++ *
++ * Prefer this to patching an entry by hand. A hand-rolled patch owns the address
++ * outright, so the second mod wanting the same function silently stops working,
++ * and which mod that is depends on load order. The target's first two
++ * instructions must be position-independent. 0 on success. */
++int    lyra_hook_install(DWORD target_va, void* replacement, void** out_next);
++
++/* ── UI thread ───────────────────────────────────────────────────────────────
++ * Anything touching the interface must run on the host's UI thread. Your daemon
++ * thread, your discovery worker and any hook that deferred its work do not.
++ * Hand the callback back with this and it runs on the next UI-loop pass, in your
++ * own process. 0 if queued, -1 if the queue is full. */
++int    lyra_ui_post(void (*fn)(void* ctx), void* ctx);
++
++/* 1 if the runtime resolved. Call once at startup to log a clear reason. */
++int    lyra_runtime_available(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* LYRA_H */
+diff --git a/backends/platform/zune/lyra_client.cpp b/backends/platform/zune/lyra_client.cpp
+new file mode 100755
+index 0000000000..7103171b16
+--- /dev/null
++++ b/backends/platform/zune/lyra_client.cpp
+@@ -0,0 +1,241 @@
++/* Resolve-once client: every verb is bound by name on first use, so a mod ships
++ * export names and never a memory layout. Binding is late and failure is soft,
++ * because a daemon may start before the platform is up and must not fail to
++ * load over a missing symbol. */
++
++#include "lyra.h"
++
++#define LYRA_RUNTIME_PATH  L"\\flash2\\automation\\zuxhook.dll"
++
++typedef int    (*fn_state_get)(const char*);
++typedef void   (*fn_state_set_status)(const char*, int);
++typedef void   (*fn_void)(void);
++typedef HANDLE (*fn_change_event)(const wchar_t*);
++typedef HANDLE (*fn_handle_key)(const char*);
++typedef int    (*fn_int)(void);
++typedef int    (*fn_int_key)(const char*);
++typedef int    (*fn_stage_row)(const char*, int, const wchar_t*, const wchar_t*, const char*);
++typedef void   (*fn_commit)(const char*, int);
++typedef void   (*fn_key_void)(const char*);
++typedef int    (*fn_get_row)(const char*, int, wchar_t*, int, wchar_t*, int, char*, int);
++typedef int    (*fn_get_sel)(const char*, char*, int);
++typedef void   (*fn_set_sel)(const char*, const char*);
++typedef void   (*fn_set_sub)(const char*, const wchar_t*);
++typedef DWORD  (*fn_kreadu32)(DWORD);
++typedef void   (*fn_kread)(DWORD, void*, DWORD);
++typedef void   (*fn_kmemcpy)(DWORD, const void*, DWORD);
++typedef DWORD  (*fn_kcall)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD);
++typedef DWORD  (*fn_dword_arg)(DWORD);
++typedef int    (*fn_patch)(DWORD, DWORD, const void*, int);
++typedef int    (*fn_hook)(DWORD, void*, void**);
++typedef int    (*fn_ui_post)(void (*)(void*), void*);
++typedef DWORD  (*fn_dword_void)(void);
++typedef DWORD  (*fn_kexec)(DWORD, DWORD);
++
++static struct {
++    int                 tried;
++    HMODULE             rt;
++    fn_state_get        state_get;
++    fn_state_set_status state_set_status;
++    fn_state_set_status state_set_setting;
++    fn_void             state_notify;
++    fn_change_event     change_event;
++    fn_handle_key       channel_scan_event;
++    fn_stage_row        channel_stage_row;
++    fn_commit           channel_commit;
++    fn_key_void         channel_open;
++    fn_int_key          channel_row_count;
++    fn_get_row          channel_get_row;
++    fn_get_sel          channel_get_selection;
++    fn_set_sel          channel_set_selection;
++    fn_set_sub          channel_set_sublabel;
++    fn_int              kernel_ready;
++    fn_int              kernel_ensure_helpers;
++    fn_kreadu32         kreadu32;
++    fn_kread            kread;
++    fn_kmemcpy          kmemcpy_;
++    fn_kcall            kcall;
++    fn_dword_arg        find_proc_struct;
++    fn_patch            patch_code;
++    fn_hook             hook_install;
++    fn_ui_post          ui_post;
++    fn_dword_void       kscratch;
++    fn_kexec            kexec_in_proc;
++} R;
++
++static void* bind_verb(const char* name) {
++    wchar_t w[64];
++    int i;
++    for (i = 0; i < 63 && name[i]; i++) w[i] = (wchar_t)(unsigned char)name[i];
++    w[i] = 0;
++    return (void*)GetProcAddress(R.rt, w);
++}
++
++/* One attempt per process. A daemon that starts before the platform stays
++   unbound for its lifetime, which is correct: the platform spawns its daemons,
++   so if it is absent when we start, it is absent. */
++static int resolve(void) {
++    if (R.tried) return R.rt != NULL;
++    R.tried = 1;
++    R.rt = LoadLibraryW(LYRA_RUNTIME_PATH);
++    if (!R.rt) return 0;
++
++    R.state_get             = (fn_state_get)       bind_verb("lyra_state_get");
++    R.state_set_status      = (fn_state_set_status)bind_verb("lyra_state_set_status");
++    R.state_set_setting     = (fn_state_set_status)bind_verb("lyra_state_set_setting");
++    R.state_notify          = (fn_void)            bind_verb("lyra_state_notify");
++    R.change_event          = (fn_change_event)    bind_verb("lyra_state_change_event");
++    R.channel_scan_event    = (fn_handle_key)      bind_verb("lyra_channel_scan_event");
++    R.channel_stage_row     = (fn_stage_row)       bind_verb("lyra_channel_stage_row");
++    R.channel_commit        = (fn_commit)          bind_verb("lyra_channel_commit");
++    R.channel_open          = (fn_key_void)        bind_verb("lyra_channel_open");
++    R.channel_row_count     = (fn_int_key)         bind_verb("lyra_channel_row_count");
++    R.channel_get_row       = (fn_get_row)         bind_verb("lyra_channel_get_row");
++    R.channel_get_selection = (fn_get_sel)         bind_verb("lyra_channel_get_selection");
++    R.channel_set_selection = (fn_set_sel)         bind_verb("lyra_channel_set_selection");
++    R.channel_set_sublabel  = (fn_set_sub)         bind_verb("lyra_channel_set_sublabel");
++    R.kernel_ready          = (fn_int)             bind_verb("lyra_kernel_ready");
++    R.kernel_ensure_helpers = (fn_int)             bind_verb("lyra_kernel_ensure_helpers");
++    R.kreadu32              = (fn_kreadu32)        bind_verb("lyra_kreadu32");
++    R.kread                 = (fn_kread)           bind_verb("lyra_kread");
++    R.kmemcpy_              = (fn_kmemcpy)         bind_verb("lyra_kmemcpy");
++    R.kcall                 = (fn_kcall)           bind_verb("lyra_kcall");
++    R.find_proc_struct      = (fn_dword_arg)       bind_verb("lyra_find_proc_struct");
++    R.patch_code            = (fn_patch)           bind_verb("lyra_patch_code");
++    R.hook_install          = (fn_hook)            bind_verb("lyra_hook_install");
++    R.ui_post               = (fn_ui_post)         bind_verb("lyra_ui_post");
++    R.kscratch              = (fn_dword_void)      bind_verb("lyra_kscratch");
++    R.kexec_in_proc         = (fn_kexec)           bind_verb("lyra_kexec_in_proc");
++    return 1;
++}
++
++int lyra_runtime_available(void) { return resolve(); }
++
++int lyra_state_get(const char* key) {
++    if (!resolve() || !R.state_get) return -1;
++    return R.state_get(key);
++}
++
++void lyra_state_set_status(const char* key, int state) {
++    if (resolve() && R.state_set_status) R.state_set_status(key, state);
++}
++
++void lyra_state_set_setting(const char* key, int state) {
++    if (resolve() && R.state_set_setting) R.state_set_setting(key, state);
++}
++
++void lyra_state_notify(void) {
++    if (resolve() && R.state_notify) R.state_notify();
++}
++
++HANDLE lyra_state_change_event(const wchar_t* daemon_event_name) {
++    if (!resolve() || !R.change_event) return NULL;
++    return R.change_event(daemon_event_name);
++}
++
++HANDLE lyra_channel_scan_event(const char* toggle_key) {
++    if (!resolve() || !R.channel_scan_event) return NULL;
++    return R.channel_scan_event(toggle_key);
++}
++
++int lyra_channel_stage_row(const char* toggle_key, int idx, const wchar_t* name,
++                           const wchar_t* sub, const char* value) {
++    if (!resolve() || !R.channel_stage_row) return 0;
++    return R.channel_stage_row(toggle_key, idx, name, sub, value);
++}
++
++void lyra_channel_commit(const char* toggle_key, int count) {
++    if (resolve() && R.channel_commit) R.channel_commit(toggle_key, count);
++}
++
++void lyra_channel_open(const char* toggle_key) {
++    if (resolve() && R.channel_open) R.channel_open(toggle_key);
++}
++
++int lyra_channel_row_count(const char* toggle_key) {
++    if (!resolve() || !R.channel_row_count) return 0;
++    return R.channel_row_count(toggle_key);
++}
++
++int lyra_channel_get_row(const char* toggle_key, int idx,
++                         wchar_t* name_out, int name_cap,
++                         wchar_t* sub_out, int sub_cap,
++                         char* value_out, int value_cap) {
++    if (!resolve() || !R.channel_get_row) return 0;
++    return R.channel_get_row(toggle_key, idx, name_out, name_cap, sub_out, sub_cap,
++                             value_out, value_cap);
++}
++
++int lyra_channel_get_selection(const char* toggle_key, char* out, int out_cap) {
++    if (!resolve() || !R.channel_get_selection) return 0;
++    return R.channel_get_selection(toggle_key, out, out_cap);
++}
++
++void lyra_channel_set_selection(const char* toggle_key, const char* value) {
++    if (resolve() && R.channel_set_selection) R.channel_set_selection(toggle_key, value);
++}
++
++void lyra_channel_set_sublabel(const char* toggle_key, const wchar_t* text) {
++    if (resolve() && R.channel_set_sublabel) R.channel_set_sublabel(toggle_key, text);
++}
++
++int lyra_kernel_ready(void) {
++    if (!resolve() || !R.kernel_ready) return 0;
++    return R.kernel_ready();
++}
++
++int lyra_kernel_ensure_helpers(void) {
++    if (!resolve() || !R.kernel_ensure_helpers) return 0;
++    return R.kernel_ensure_helpers();
++}
++
++DWORD lyra_kreadu32(DWORD va) {
++    if (!resolve() || !R.kreadu32) return 0;
++    return R.kreadu32(va);
++}
++
++void lyra_kread(DWORD va, void* buf, DWORD len) {
++    if (resolve() && R.kread) R.kread(va, buf, len);
++}
++
++void lyra_kmemcpy(DWORD va, const void* buf, DWORD len) {
++    if (resolve() && R.kmemcpy_) R.kmemcpy_(va, buf, len);
++}
++
++DWORD lyra_kcall(DWORD fn, DWORD a0, DWORD a1, DWORD a2,
++                 DWORD a3, DWORD a4, DWORD a5) {
++    if (!resolve() || !R.kcall) return 0;
++    return R.kcall(fn, a0, a1, a2, a3, a4, a5);
++}
++
++DWORD lyra_find_proc_struct(DWORD pid) {
++    if (!resolve() || !R.find_proc_struct) return 0;
++    return R.find_proc_struct(pid);
++}
++
++int lyra_patch_code(DWORD target_proc, DWORD target_va,
++                    const void* bytes, int len) {
++    if (!resolve() || !R.patch_code) return -1;
++    return R.patch_code(target_proc, target_va, bytes, len);
++}
++
++int lyra_hook_install(DWORD target_va, void* replacement, void** out_next) {
++    if (out_next) *out_next = 0;
++    if (!resolve() || !R.hook_install) return -1;
++    return R.hook_install(target_va, replacement, out_next);
++}
++
++int lyra_ui_post(void (*fn)(void* ctx), void* ctx) {
++    if (!resolve() || !R.ui_post) return -1;
++    return R.ui_post(fn, ctx);
++}
++
++DWORD lyra_kscratch(void) {
++    if (!resolve() || !R.kscratch) return 0;
++    return R.kscratch();
++}
++
++DWORD lyra_kexec_in_proc(DWORD target_proc, DWORD code_va) {
++    if (!resolve() || !R.kexec_in_proc) return 0;
++    return R.kexec_in_proc(target_proc, code_va);
++}
+diff --git a/backends/platform/zune/module.mk b/backends/platform/zune/module.mk
+new file mode 100644
+index 0000000000..3ed7b74044
+--- /dev/null
++++ b/backends/platform/zune/module.mk
+@@ -0,0 +1,17 @@
++MODULE := backends/platform/zune
++
++MODULE_OBJS := \
++	zune.o \
++	zune-graphics.o \
++	lyra_client.o
++
++# Like the null backend: not using rules.mk, update OBJS and MODULE_DIRS by hand.
++MODULE_OBJS := $(addprefix $(MODULE)/, $(MODULE_OBJS))
++
++# Windows filesystem backend (the generic WIN32 object list in backends/module.mk is SDL-only).
++MODULE_OBJS += \
++	backends/fs/windows/windows-fs.o \
++	backends/fs/windows/windows-fs-factory.o
++
++OBJS := $(MODULE_OBJS) $(OBJS)
++MODULE_DIRS += $(sort $(dir $(MODULE_OBJS)))
+diff --git a/backends/platform/zune/portdefs.h b/backends/platform/zune/portdefs.h
+new file mode 100644
+index 0000000000..ebc2c67822
+--- /dev/null
++++ b/backends/platform/zune/portdefs.h
+@@ -0,0 +1,18 @@
++#ifndef ZUNE_PORTDEFS_H
++#define ZUNE_PORTDEFS_H
++// Zune HD (WinCE ARM, cegcc): the mingw runtime provides the usual libc; nothing special yet.
++#include <stdio.h>
++#include <stdlib.h>
++#include <stddef.h>
++#include <string.h>
++#include <ctype.h>
++#include <math.h>
++#include <limits.h>
++#include <time.h>
++#include <stdarg.h>
++#include <assert.h>
++#include <new>
++// The CE runtime lacks these; zune.cpp implements them with DeleteFile/MoveFile.
++extern "C" int remove(const char *path);
++extern "C" int rename(const char *from, const char *to);
++#endif
+diff --git a/backends/platform/zune/zune-graphics.cpp b/backends/platform/zune/zune-graphics.cpp
+new file mode 100644
+index 0000000000..be0f259319
+--- /dev/null
++++ b/backends/platform/zune/zune-graphics.cpp
+@@ -0,0 +1,277 @@
++#define FORBIDDEN_SYMBOL_ALLOW_ALL
++
++#include "common/scummsys.h"
++#include "backends/platform/zune/zune-graphics.h"
++#include "common/rect.h"
++#include "common/list.h"
++
++#include <windows.h>
++extern "C" {
++#include "backends/platform/zune/lyra.h"
++}
++
++#define FB_PTR_FIELD  0xC07EFFE8u   // libnvddk_disp: live front-buffer PA (see screencast mod)
++#define CARVEOUT_PA   0x06000000u
++#define CARVEOUT_KVA  0xD0970000u
++#define CARVEOUT_SIZE 0x02000000u
++#define KMEMCPY_F     0x80072318u   // CE6 u32-stride kernel memcpy(dst, src, len)
++#define PUSH_CHUNK    0x2000u       // small chunks so the compositor's lock is never held long
++
++static const OSystem::GraphicsMode s_zuneModes[] = { { "default", "Zune", 0 }, { 0, 0, 0 } };
++
++ZuneGraphicsManager::ZuneGraphicsManager()
++	: _ovl(0), _ovlOn(false), _dirty(true), _curVis(false), _cursorPaletteOn(false),
++	  _w(320), _h(200), _changeId(0), _shake(0), _mx(0), _my(0),
++	  _cur(0), _cw(0), _ch(0), _chx(0), _chy(0), _ckey(0), _offX(0), _dispW(LAND_W), _lastPush(0) {
++	memset(_pal, 0, sizeof(_pal));
++	memset(_palArgb, 0, sizeof(_palArgb));
++	memset(_cpal, 0, sizeof(_cpal));
++	memset(_cpalArgb, 0, sizeof(_cpalArgb));
++	_ovl = (uint16 *)calloc(LAND_W * LAND_H, 2);
++	_frame = (uint32 *)calloc(FB_W * FB_H, 4);
++	lyra_kernel_ensure_helpers();
++}
++
++ZuneGraphicsManager::~ZuneGraphicsManager() {
++	_surf.free();
++	free(_ovl);
++	free(_frame);
++	free(_cur);
++}
++
++const OSystem::GraphicsMode *ZuneGraphicsManager::getSupportedGraphicsModes() const {
++	return s_zuneModes;
++}
++
++#ifdef USE_RGB_COLOR
++Common::List<Graphics::PixelFormat> ZuneGraphicsManager::getSupportedFormats() const {
++	Common::List<Graphics::PixelFormat> list;
++	list.push_back(Graphics::PixelFormat::createFormatCLUT8());
++	return list;
++}
++#endif
++
++void ZuneGraphicsManager::initSize(uint width, uint height, const Graphics::PixelFormat *format) {
++	_surf.free();
++	_surf.create(width, height, Graphics::PixelFormat::createFormatCLUT8());
++	memset(_surf.getPixels(), 0, width * height);
++	_w = width;
++	_h = height;
++	// Fit the game into the landscape view keeping aspect, centred.
++	_dispW = (int)(width * LAND_H / height);
++	if (_dispW > LAND_W) _dispW = LAND_W;
++	_offX = (LAND_W - _dispW) / 2;
++	_changeId++;
++	_dirty = true;
++}
++
++static inline uint32 rgbToArgb(const byte *c) {
++	return 0xFF000000u | ((uint32)c[0] << 16) | ((uint32)c[1] << 8) | c[2];
++}
++
++void ZuneGraphicsManager::setPalette(const byte *colors, uint start, uint num) {
++	for (uint i = 0; i < num && start + i < 256; i++) {
++		memcpy(_pal + (start + i) * 3, colors + i * 3, 3);
++		_palArgb[start + i] = rgbToArgb(colors + i * 3);
++	}
++	_dirty = true;
++}
++
++void ZuneGraphicsManager::grabPalette(byte *colors, uint start, uint num) const {
++	for (uint i = 0; i < num && start + i < 256; i++)
++		memcpy(colors + i * 3, _pal + (start + i) * 3, 3);
++}
++
++void ZuneGraphicsManager::setCursorPalette(const byte *colors, uint start, uint num) {
++	for (uint i = 0; i < num && start + i < 256; i++) {
++		memcpy(_cpal + (start + i) * 3, colors + i * 3, 3);
++		_cpalArgb[start + i] = rgbToArgb(colors + i * 3);
++	}
++	_cursorPaletteOn = true;
++}
++
++void ZuneGraphicsManager::copyRectToScreen(const void *buf, int pitch, int x, int y, int w, int h) {
++	if (x < 0) { buf = (const byte *)buf - x; w += x; x = 0; }
++	if (y < 0) { buf = (const byte *)buf - y * pitch; h += y; y = 0; }
++	if (x + w > _w) w = _w - x;
++	if (y + h > _h) h = _h - y;
++	if (w <= 0 || h <= 0) return;
++	const byte *src = (const byte *)buf;
++	byte *dst = (byte *)_surf.getBasePtr(x, y);
++	for (int j = 0; j < h; j++) {
++		memcpy(dst, src, w);
++		src += pitch;
++		dst += _surf.pitch;
++	}
++	_dirty = true;
++}
++
++void ZuneGraphicsManager::fillScreen(uint32 col) {
++	memset(_surf.getPixels(), (int)col, _surf.pitch * _h);
++	_dirty = true;
++}
++
++void ZuneGraphicsManager::clearOverlay() {
++	memset(_ovl, 0, LAND_W * LAND_H * 2);
++	_dirty = true;
++}
++
++void ZuneGraphicsManager::grabOverlay(void *buf, int pitch) const {
++	byte *dst = (byte *)buf;
++	for (int y = 0; y < LAND_H; y++) {
++		memcpy(dst, _ovl + y * LAND_W, LAND_W * 2);
++		dst += pitch;
++	}
++}
++
++void ZuneGraphicsManager::copyRectToOverlay(const void *buf, int pitch, int x, int y, int w, int h) {
++	if (x < 0) { buf = (const byte *)buf - x * 2; w += x; x = 0; }
++	if (y < 0) { buf = (const byte *)buf - y * pitch; h += y; y = 0; }
++	if (x + w > LAND_W) w = LAND_W - x;
++	if (y + h > LAND_H) h = LAND_H - y;
++	if (w <= 0 || h <= 0) return;
++	const byte *src = (const byte *)buf;
++	for (int j = 0; j < h; j++) {
++		memcpy(_ovl + (y + j) * LAND_W + x, src, w * 2);
++		src += pitch;
++	}
++	_dirty = true;
++}
++
++void ZuneGraphicsManager::setMouseCursor(const void *buf, uint w, uint h, int hotspotX, int hotspotY, uint32 keycolor, bool dontScale, const Graphics::PixelFormat *format) {
++	free(_cur);
++	_cur = (byte *)malloc(w * h);
++	memcpy(_cur, buf, w * h);       // CLUT8 only (SCUMM)
++	_cw = w; _ch = h; _chx = hotspotX; _chy = hotspotY; _ckey = keycolor;
++	_dirty = true;
++}
++
++void ZuneGraphicsManager::landscapeToMouse(int lx, int ly, int &mx, int &my) const {
++	if (_ovlOn) {
++		mx = lx; my = ly;
++	} else {
++		mx = (lx - _offX) * _w / _dispW;
++		my = ly * _h / LAND_H;
++		if (mx < 0) mx = 0;
++		if (mx >= _w) mx = _w - 1;
++		if (my < 0) my = 0;
++		if (my >= _h) my = _h - 1;
++	}
++}
++
++// Landscape (lx, ly) -> staged portrait buffer index.
++#define FBIDX(lx, ly) ((lx) * FB_W + (FB_W - 1 - (ly)))
++
++void ZuneGraphicsManager::render() {
++	if (_ovlOn) {
++		for (int lx = 0; lx < LAND_W; lx++) {
++			uint32 *row = _frame + lx * FB_W;
++			for (int ly = 0; ly < LAND_H; ly++) {
++				uint16 p = _ovl[ly * LAND_W + lx];
++				row[FB_W - 1 - ly] = 0xFF000000u | ((uint32)(p >> 11) << 19) | ((uint32)((p >> 5) & 63) << 10) | ((uint32)(p & 31) << 3);
++			}
++		}
++	} else {
++		static int xmap[LAND_W], ymap[LAND_H];
++		for (int lx = 0; lx < LAND_W; lx++)
++			xmap[lx] = (lx < _offX || lx >= _offX + _dispW) ? -1 : (lx - _offX) * _w / _dispW;
++		for (int ly = 0; ly < LAND_H; ly++) {
++			int sy = ly * _h / LAND_H - _shake;
++			ymap[ly] = (sy < 0 || sy >= _h) ? -1 : sy;
++		}
++		const byte *pix = (const byte *)_surf.getPixels();
++		for (int lx = 0; lx < LAND_W; lx++) {
++			uint32 *row = _frame + lx * FB_W;
++			int sx = xmap[lx];
++			if (sx < 0) { for (int i = 0; i < FB_W; i++) row[i] = 0xFF000000u; continue; }
++			for (int ly = 0; ly < LAND_H; ly++) {
++				int sy = ymap[ly];
++				row[FB_W - 1 - ly] = (sy < 0) ? 0xFF000000u : _palArgb[pix[sy * _surf.pitch + sx]];
++			}
++		}
++	}
++
++	if (_curVis && _cur) {
++		const uint32 *pal = _cursorPaletteOn ? _cpalArgb : _palArgb;
++		for (int cy = 0; cy < _ch; cy++) {
++			for (int cx = 0; cx < _cw; cx++) {
++				byte c = _cur[cy * _cw + cx];
++				if (c == _ckey) continue;
++				int gx = _mx - _chx + cx, gy = _my - _chy + cy;
++				int x0, x1, y0, y1;
++				if (_ovlOn) { x0 = gx; x1 = gx + 1; y0 = gy; y1 = gy + 1; }
++				else {
++					x0 = _offX + gx * _dispW / _w;  x1 = _offX + (gx + 1) * _dispW / _w;
++					y0 = gy * LAND_H / _h;          y1 = (gy + 1) * LAND_H / _h;
++					if (x1 <= x0) x1 = x0 + 1;
++					if (y1 <= y0) y1 = y0 + 1;
++				}
++				for (int y = y0; y < y1; y++) {
++					if (y < 0 || y >= LAND_H) continue;
++					for (int x = x0; x < x1; x++)
++						if (x >= 0 && x < LAND_W) _frame[FBIDX(x, y)] = pal[c];
++				}
++			}
++		}
++	}
++	drawHints();
++}
++
++// Two small on-screen buttons (the Zune's hardware buttons are not reachable while ScummVM runs as an app):
++// top-left "menu" (tap: ScummVM menu with Quit; hold 3s: force quit) and top-right "skip" (tap: Esc).
++// They sit inside the touch zones handled in zune.cpp.
++void ZuneGraphicsManager::drawHints() {
++	const int BW = 40, BH = 28, PAD = 6;
++	for (int k = 0; k < 3; k++) {
++		int bx = (k == 0) ? PAD : LAND_W - PAD - BW, by = (k == 2) ? LAND_H - PAD - BH : PAD;
++		for (int y = by; y < by + BH; y++) {
++			for (int x = bx; x < bx + BW; x++) {
++				uint32 &p = _frame[FBIDX(x, y)];
++				p = 0xFF000000u | ((((p >> 16) & 0xFF) >> 1) << 16) | ((((p >> 8) & 0xFF) >> 1) << 8) | ((p & 0xFF) >> 1);   // darken 50%
++			}
++		}
++		const uint32 W = 0xFFFFFFFFu;
++		if (k == 0) {                                   // menu: three bars
++			for (int i = 0; i < 3; i++)
++				for (int x = bx + 10; x < bx + BW - 10; x++)
++					for (int t = 0; t < 3; t++)
++						_frame[FBIDX(x, by + 6 + i * 7 + t)] = W;
++		} else if (k == 2) {                            // inventory (right click): a small bag outline
++			for (int x = bx + 11; x < bx + BW - 11; x++)
++				for (int y = by + 7; y < by + BH - 6; y++)
++					if (x < bx + 13 || x >= bx + BW - 13 || y < by + 9 || y >= by + BH - 8) _frame[FBIDX(x, y)] = W;
++		} else {                                        // skip: two ">" chevrons
++			for (int c = 0; c < 2; c++)
++				for (int i = 0; i < 9; i++)
++					for (int t = 0; t < 2; t++) {
++						int x = bx + 9 + c * 11 + i + t;
++						_frame[FBIDX(x, by + 5 + i)] = W;
++						_frame[FBIDX(x, by + BH - 6 - i)] = W;
++					}
++		}
++	}
++}
++
++// Copy the staged frame into the live front buffer in small kernel-memcpy chunks.
++void ZuneGraphicsManager::push(int rowMin, int rowMax) {
++	DWORD pa = lyra_kreadu32(FB_PTR_FIELD);
++	if (pa < CARVEOUT_PA || pa + FB_W * FB_H * 4 > CARVEOUT_PA + CARVEOUT_SIZE) return;
++	DWORD dst = pa - CARVEOUT_PA + CARVEOUT_KVA + (DWORD)rowMin * FB_W * 4;
++	DWORD src = (DWORD)(_frame + rowMin * FB_W);
++	DWORD len = (DWORD)(rowMax - rowMin + 1) * FB_W * 4;
++	for (DWORD o = 0; o < len; o += PUSH_CHUNK) {
++		DWORD n = (len - o > PUSH_CHUNK) ? PUSH_CHUNK : (len - o);
++		lyra_kcall(KMEMCPY_F, dst + o, src + o, n, 0, 0, 0);
++		Sleep(0);
++	}
++}
++
++void ZuneGraphicsManager::updateScreen() {
++	// The Zune UI is frozen while we run; this is only a slow safety refresh in case something
++	// still repaints the buffer. (A 66ms re-push crashed the device - keep this gentle.)
++	DWORD now = GetTickCount();
++	if (!_dirty && now - _lastPush < 1000) return;
++	if (_dirty) { _dirty = false; render(); }
++	_lastPush = now;
++	push(0, FB_H - 1);
++}
+diff --git a/backends/platform/zune/zune-graphics.h b/backends/platform/zune/zune-graphics.h
+new file mode 100644
+index 0000000000..4f8bcaa6f3
+--- /dev/null
++++ b/backends/platform/zune/zune-graphics.h
+@@ -0,0 +1,88 @@
++#ifndef BACKENDS_GRAPHICS_ZUNE_H
++#define BACKENDS_GRAPHICS_ZUNE_H
++
++#include "backends/graphics/graphics.h"
++#include "graphics/surface.h"
++
++// Zune HD display: portrait 272x480 ARGB front buffer, played in landscape 480x272.
++// Game screen (CLUT8) is nearest-scaled into the landscape view, rotated into the buffer,
++// then pushed to the kernel-owned front buffer with lyra_kcall in small chunks.
++class ZuneGraphicsManager : public GraphicsManager {
++public:
++	enum { LAND_W = 480, LAND_H = 272, FB_W = 272, FB_H = 480 };
++
++	ZuneGraphicsManager();
++	virtual ~ZuneGraphicsManager();
++
++	bool hasFeature(OSystem::Feature f) const override { return f == OSystem::kFeatureCursorPalette; }
++	void setFeatureState(OSystem::Feature f, bool enable) override { if (f == OSystem::kFeatureCursorPalette) _cursorPaletteOn = enable; }
++	bool getFeatureState(OSystem::Feature f) const override { return f == OSystem::kFeatureCursorPalette && _cursorPaletteOn; }
++
++	const OSystem::GraphicsMode *getSupportedGraphicsModes() const override;
++	int getDefaultGraphicsMode() const override { return 0; }
++	bool setGraphicsMode(int mode) override { return true; }
++	void resetGraphicsScale() override {}
++	int getGraphicsMode() const override { return 0; }
++#ifdef USE_RGB_COLOR
++	Graphics::PixelFormat getScreenFormat() const override { return Graphics::PixelFormat::createFormatCLUT8(); }
++	Common::List<Graphics::PixelFormat> getSupportedFormats() const override;
++#endif
++	void initSize(uint width, uint height, const Graphics::PixelFormat *format = NULL) override;
++	int getScreenChangeID() const override { return _changeId; }
++
++	void beginGFXTransaction() override {}
++	OSystem::TransactionError endGFXTransaction() override { return OSystem::kTransactionSuccess; }
++
++	int16 getHeight() const override { return _h; }
++	int16 getWidth() const override { return _w; }
++	void setPalette(const byte *colors, uint start, uint num) override;
++	void grabPalette(byte *colors, uint start, uint num) const override;
++	void copyRectToScreen(const void *buf, int pitch, int x, int y, int w, int h) override;
++	Graphics::Surface *lockScreen() override { return &_surf; }
++	void unlockScreen() override { _dirty = true; }
++	void fillScreen(uint32 col) override;
++	void updateScreen() override;
++	void setShakePos(int shakeOffset) override { _shake = shakeOffset; _dirty = true; }
++	void setFocusRectangle(const Common::Rect &rect) override {}
++	void clearFocusRectangle() override {}
++
++	void showOverlay() override { _ovlOn = true; _dirty = true; }
++	void hideOverlay() override { _ovlOn = false; _dirty = true; }
++	Graphics::PixelFormat getOverlayFormat() const override { return Graphics::PixelFormat(2, 5, 6, 5, 0, 11, 5, 0, 0); }
++	void clearOverlay() override;
++	void grabOverlay(void *buf, int pitch) const override;
++	void copyRectToOverlay(const void *buf, int pitch, int x, int y, int w, int h) override;
++	int16 getOverlayHeight() const override { return LAND_H; }
++	int16 getOverlayWidth() const override { return LAND_W; }
++
++	bool showMouse(bool visible) override { bool o = _curVis; _curVis = visible; _dirty = true; return o; }
++	void warpMouse(int x, int y) override { _mx = x; _my = y; _dirty = true; }
++	void setMouseCursor(const void *buf, uint w, uint h, int hotspotX, int hotspotY, uint32 keycolor, bool dontScale = false, const Graphics::PixelFormat *format = NULL) override;
++	void setCursorPalette(const byte *colors, uint start, uint num) override;
++
++	// PaletteManager is declared by GraphicsManager's base; setPalette/grabPalette above implement it.
++
++	// Landscape pixel (0..479, 0..271) -> coordinates in the current mouse space (overlay or game).
++	void landscapeToMouse(int lx, int ly, int &mx, int &my) const;
++	void setMouse(int x, int y) { _mx = x; _my = y; _dirty = true; }
++
++private:
++	void render();
++	void drawHints();
++	void push(int rowMin, int rowMax);
++
++	Graphics::Surface _surf;
++	byte _pal[256 * 3];
++	uint32 _palArgb[256];
++	uint16 *_ovl;
++	bool _ovlOn, _dirty, _curVis, _cursorPaletteOn;
++	int _w, _h, _changeId, _shake;
++	int _mx, _my;
++	byte *_cur; int _cw, _ch, _chx, _chy; uint32 _ckey;
++	byte _cpal[256 * 3]; uint32 _cpalArgb[256];
++	int _offX, _dispW;        // game view inside the landscape screen
++	uint32 *_frame;           // FB_W*FB_H staged ARGB
++	uint32 _lastPush;         // GetTickCount of the last push to the front buffer
++};
++
++#endif
+diff --git a/backends/platform/zune/zune.cpp b/backends/platform/zune/zune.cpp
+new file mode 100644
+index 0000000000..41109280c7
+--- /dev/null
++++ b/backends/platform/zune/zune.cpp
+@@ -0,0 +1,572 @@
++// ScummVM backend for the Zune HD, running as a Lyra plugin DLL inside the daemon (nativeapp.exe).
++// Hardware paths (all proven by spikes): framebuffer write via lyra_kcall, touch read from servicesd's
++// ci3 ring, audio via WaveOut. WinCE ignores CreateThread stack sizes (64KB), so engine code runs on a
++// private VirtualAlloc'ed stack via call_on_stack().
++#define FORBIDDEN_SYMBOL_ALLOW_ALL
++
++#include "common/scummsys.h"
++
++#if defined(USE_ZUNE_DRIVER)
++
++#include <windows.h>
++#include <mmsystem.h>
++extern "C" {
++#include "backends/platform/zune/lyra.h"
++}
++
++#include "backends/modular-backend.h"
++#include "base/main.h"
++#include "backends/saves/default/default-saves.h"
++#include "backends/timer/default/default-timer.h"
++#include "backends/events/default/default-events.h"
++#include "backends/mutex/mutex.h"
++#include "backends/fs/windows/windows-fs-factory.h"
++#include "backends/platform/zune/zune-graphics.h"
++#include "audio/mixer_intern.h"
++#include "common/events.h"
++#include "common/queue.h"
++#include "common/config-manager.h"
++
++// ---- private stacks --------------------------------------------------------------------------
++extern "C" void *call_on_stack(void *(*fn)(void *), void *arg, void *stack_top);
++__asm__(
++".text\n.code 32\n.align 2\n.global call_on_stack\ncall_on_stack:\n"
++"  stmfd sp!, {r4, r5, lr}\n"
++"  mov r4, sp\n"
++"  mov sp, r2\n"
++"  mov r3, r0\n"
++"  mov r0, r1\n"
++"  mov lr, pc\n"
++"  mov pc, r3\n"
++"  mov sp, r4\n"
++"  ldmfd sp!, {r4, r5, lr}\n"
++"  mov pc, lr\n");
++
++struct StackJob { void *(*fn)(void *); void *arg; byte *blk; DWORD size; };
++
++static DWORD WINAPI stackThread(LPVOID p) {
++	StackJob *j = (StackJob *)p;
++	call_on_stack(j->fn, j->arg, j->blk + j->size - 16);
++	return 0;
++}
++
++static HANDLE startStackThread(void *(*fn)(void *), void *arg, DWORD stackBytes) {
++	StackJob *j = new StackJob;
++	j->fn = fn; j->arg = arg; j->size = stackBytes;
++	j->blk = (byte *)VirtualAlloc(NULL, stackBytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++	if (!j->blk) return NULL;
++	return CreateThread(NULL, 0, stackThread, j, 0, NULL);
++}
++
++// ---- libc gaps in the CE runtime ----------------------------------------------------------------
++static void toWide(const char *s, WCHAR *w, int cap) { MultiByteToWideChar(CP_ACP, 0, s, -1, w, cap); }
++extern "C" int remove(const char *path) { WCHAR w[MAX_PATH]; toWide(path, w, MAX_PATH); return DeleteFileW(w) ? 0 : -1; }
++extern "C" int rename(const char *a, const char *b) { WCHAR wa[MAX_PATH], wb[MAX_PATH]; toWide(a, wa, MAX_PATH); toWide(b, wb, MAX_PATH); return MoveFileW(wa, wb) ? 0 : -1; }
++
++bool isSmartphone() { return false; }   // referenced by engines/engine.cpp for _WIN32_WCE
++
++// ---- globals ----------------------------------------------------------------------------------
++static HANDLE g_stop = NULL;
++static volatile bool g_quit = false;
++
++static void zlog(const char *msg) {
++	HANDLE h = CreateFileW(L"\\flash2\\scummvm\\scummvm.log", GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++	if (h == INVALID_HANDLE_VALUE) return;
++	SetFilePointer(h, 0, NULL, FILE_END);
++	DWORD n; WriteFile(h, msg, (DWORD)strlen(msg), &n, NULL);
++	CloseHandle(h);
++}
++
++// CE has no current directory; our paths are always fully qualified, so plain fopen is enough.
++extern "C" FILE *wce_fopen(const char *fname, const char *fmode) { return fopen(fname, fmode); }
++
++// ---- mutexes ----------------------------------------------------------------------------------
++class ZuneMutexManager : public MutexManager {
++public:
++	OSystem::MutexRef createMutex() override {
++		CRITICAL_SECTION *cs = new CRITICAL_SECTION;
++		InitializeCriticalSection(cs);
++		return (OSystem::MutexRef)cs;
++	}
++	void lockMutex(OSystem::MutexRef m) override { EnterCriticalSection((CRITICAL_SECTION *)m); }
++	void unlockMutex(OSystem::MutexRef m) override { LeaveCriticalSection((CRITICAL_SECTION *)m); }
++	void deleteMutex(OSystem::MutexRef m) override { DeleteCriticalSection((CRITICAL_SECTION *)m); delete (CRITICAL_SECTION *)m; }
++};
++
++// ---- the system -------------------------------------------------------------------------------
++class OSystem_Zune : public ModularBackend, Common::EventSource {
++public:
++	OSystem_Zune();
++	virtual ~OSystem_Zune();
++
++	void initBackend() override;
++	Common::EventSource *getDefaultEventSource() override { return this; }
++	bool pollEvent(Common::Event &event) override;
++	uint32 getMillis(bool skipRecord = false) override { return GetTickCount() - _t0; }
++	void delayMillis(uint msecs) override { Sleep(msecs); }
++	void getTimeAndDate(TimeDate &t) const override;
++	void logMessage(LogMessageType::Type type, const char *message) override { zlog(message); }
++
++	void pushEvent(const Common::Event &e);
++	void pushKey(Common::KeyCode code, int ascii, int flags);
++	ZuneGraphicsManager *gfx() { return (ZuneGraphicsManager *)_graphicsManager; }
++
++	void touchLoop();
++	void audioLoop();
++	void timerLoop();
++
++private:
++	DWORD _t0;
++	CRITICAL_SECTION _evCs;
++	Common::Queue<Common::Event> _events;
++	bool _sentQuit;
++};
++
++OSystem_Zune::OSystem_Zune() : _t0(GetTickCount()), _sentQuit(false) {
++	_fsFactory = new WindowsFilesystemFactory();
++	InitializeCriticalSection(&_evCs);
++}
++
++OSystem_Zune::~OSystem_Zune() {
++	// Like the stock backends: the timer/event/save managers must go before ModularBackend deletes
++	// the mutex manager they lock through g_system in their own destructors.
++	delete _timerManager;
++	_timerManager = 0;
++	delete _eventManager;
++	_eventManager = 0;
++	delete _savefileManager;
++	_savefileManager = 0;
++}
++
++void OSystem_Zune::getTimeAndDate(TimeDate &t) const {
++	SYSTEMTIME st; GetLocalTime(&st);
++	t.tm_sec = st.wSecond; t.tm_min = st.wMinute; t.tm_hour = st.wHour;
++	t.tm_mday = st.wDay; t.tm_mon = st.wMonth - 1; t.tm_year = st.wYear - 1900; t.tm_wday = st.wDayOfWeek;
++}
++
++void OSystem_Zune::pushKey(Common::KeyCode code, int ascii, int flags) {
++	Common::Event e;
++	e.kbd.keycode = code; e.kbd.ascii = ascii; e.kbd.flags = flags;
++	e.type = Common::EVENT_KEYDOWN; pushEvent(e);
++	e.type = Common::EVENT_KEYUP; pushEvent(e);
++}
++
++void OSystem_Zune::pushEvent(const Common::Event &e) {
++	EnterCriticalSection(&_evCs);
++	_events.push(e);
++	LeaveCriticalSection(&_evCs);
++}
++
++bool OSystem_Zune::pollEvent(Common::Event &event) {
++	if (g_quit && !_sentQuit) {
++		_sentQuit = true;
++		event.type = Common::EVENT_QUIT;
++		return true;
++	}
++	if (WaitForSingleObject(g_stop, 0) == WAIT_OBJECT_0) g_quit = true;
++	bool got = false;
++	EnterCriticalSection(&_evCs);
++	if (!_events.empty()) { event = _events.pop(); got = true; }
++	LeaveCriticalSection(&_evCs);
++	return got;
++}
++
++// ---- helper threads (static trampolines run on private stacks) --------------------------------
++static void *touchEntry(void *p) { ((OSystem_Zune *)p)->touchLoop(); return 0; }
++static void *audioEntry(void *p) { ((OSystem_Zune *)p)->audioLoop(); return 0; }
++static void *timerEntry(void *p) { ((OSystem_Zune *)p)->timerLoop(); return 0; }
++
++static Audio::MixerImpl *g_mixer = 0;
++static DefaultTimerManager *g_timer = 0;
++
++void OSystem_Zune::initBackend() {
++	_mutexManager = new ZuneMutexManager();
++	_timerManager = new DefaultTimerManager();
++	g_timer = (DefaultTimerManager *)_timerManager;
++	_eventManager = new DefaultEventManager(this);
++	_savefileManager = new DefaultSaveFileManager();
++	_graphicsManager = new ZuneGraphicsManager();
++	g_mixer = new Audio::MixerImpl(this, 22050);
++	_mixer = g_mixer;
++	g_mixer->setReady(true);
++
++	ModularBackend::initBackend();
++
++	startStackThread(touchEntry, this, 128 * 1024);
++	startStackThread(audioEntry, this, 512 * 1024);
++	startStackThread(timerEntry, this, 512 * 1024);
++}
++
++extern "C" void SystemIdleTimerReset(void);   // coredll: keeps the screen from timing out
++
++void OSystem_Zune::timerLoop() {
++	int ticks = 0;
++	while (!g_quit) {
++		Sleep(10);
++		g_timer->handler();
++		if (++ticks >= 300) { ticks = 0; SystemIdleTimerReset(); }   // ~every 3s
++	}
++}
++
++void OSystem_Zune::audioLoop() {
++	const int RATE = 22050, FRAMES = 2048, NBUF = 4;
++	static short bufs[NBUF][FRAMES * 2];
++	WAVEFORMATEX wf; memset(&wf, 0, sizeof wf);
++	wf.wFormatTag = WAVE_FORMAT_PCM; wf.nChannels = 2; wf.nSamplesPerSec = RATE;
++	wf.wBitsPerSample = 16; wf.nBlockAlign = 4; wf.nAvgBytesPerSec = RATE * 4;
++	HWAVEOUT h = 0;
++	MMRESULT r = waveOutOpen(&h, WAVE_MAPPER, &wf, 0, 0, CALLBACK_NULL);
++	if (r != MMSYSERR_NOERROR) { char m[64]; sprintf(m, "waveOutOpen failed %u\n", (unsigned)r); zlog(m); return; }
++	WAVEHDR hdr[NBUF]; memset(hdr, 0, sizeof hdr);
++	for (int i = 0; i < NBUF; i++) {
++		hdr[i].lpData = (LPSTR)bufs[i]; hdr[i].dwBufferLength = FRAMES * 4;
++		waveOutPrepareHeader(h, &hdr[i], sizeof(WAVEHDR));
++		hdr[i].dwFlags |= WHDR_DONE;
++	}
++	while (!g_quit) {
++		bool any = false;
++		for (int i = 0; i < NBUF; i++) {
++			if (hdr[i].dwFlags & WHDR_DONE) {
++				g_mixer->mixCallback((byte *)bufs[i], FRAMES * 4);
++				hdr[i].dwFlags &= ~WHDR_DONE;
++				waveOutWrite(h, &hdr[i], sizeof(WAVEHDR));
++				any = true;
++			}
++		}
++		if (!any) Sleep(5);
++	}
++	waveOutReset(h);
++	for (int i = 0; i < NBUF; i++) waveOutUnprepareHeader(h, &hdr[i], sizeof(WAVEHDR));
++	waveOutClose(h);
++}
++
++// ---- touch: poll servicesd's ci3 ring (read-only) and turn it into mouse events ---------------
++#define NK_PROC_LIST  0x80bee010u
++#define ZAM_CI3       0x418a7bf0u
++#define ZAM_RING_BASE (ZAM_CI3 + 0x1cu)
++
++static void kname(DWORD w, char *out, int cap) {
++	int i = 0;
++	for (; i < cap - 1 && w; i++) {
++		unsigned short ch = (unsigned short)(lyra_kreadu32(w + i * 2) & 0xffff);
++		if (!ch) break;
++		out[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : (char)ch;
++	}
++	out[i] = 0;
++}
++
++static DWORD findPid(const char *want) {
++	DWORD head = lyra_kreadu32(NK_PROC_LIST), cur = head;
++	for (int i = 0; i < 64 && cur; i++) {
++		char nm[24]; kname(lyra_kreadu32(cur + 0x20), nm, sizeof nm);
++		if (strstr(nm, want)) return lyra_kreadu32(cur + 0x0c);
++		DWORD nxt = lyra_kreadu32(cur); if (nxt == head) break; cur = nxt;
++	}
++	return 0;
++}
++
++// ---- freeze the Zune UI (gemstone) while ScummVM owns the screen -------------------------------
++// Stops the compositor redrawing over our frames and stops the Zune UI reacting to our touches.
++// CE thread ids from toolhelp are usable as thread handles. Always thaw on exit.
++#include <tlhelp32.h>
++static DWORD g_frozen[256];
++static int g_nfrozen = 0;
++
++static void freezeUi() {
++	// The Zune UI shell is "gemstone"; while an XNA app tile is running the shell is gone and the Zune-logo
++	// loader that keeps redrawing the screen belongs to "xnalauncher". Freeze whichever of them exist.
++	DWORD pid = findPid("gemstone"), pid2 = findPid("xnalauncher"), pid3 = findPid("compositor");
++	if (pid) { pid2 = 0; pid3 = 0; }       // normal mode: the shell is running, freeze only it (buttons keep working)
++	HMODULE th = LoadLibraryW(L"toolhelp.dll");
++	if ((!pid && !pid2 && !pid3) || !th) return;
++	typedef HANDLE (WINAPI *PSnap)(DWORD, DWORD);
++	typedef BOOL (WINAPI *PThread)(HANDLE, LPTHREADENTRY32);
++	typedef BOOL (WINAPI *PClose)(HANDLE);
++	PSnap snap = (PSnap)GetProcAddress(th, L"CreateToolhelp32Snapshot");
++	PThread first = (PThread)GetProcAddress(th, L"Thread32First");
++	PThread next = (PThread)GetProcAddress(th, L"Thread32Next");
++	PClose cls = (PClose)GetProcAddress(th, L"CloseToolhelp32Snapshot");
++	if (!snap || !first || !next) return;
++	HANDLE s = snap(TH32CS_SNAPTHREAD, 0);
++	if (s == INVALID_HANDLE_VALUE) return;
++	THREADENTRY32 te; te.dwSize = sizeof te;
++	if (first(s, &te)) {
++		do {
++			if (((pid && te.th32OwnerProcessID == pid) || (pid2 && te.th32OwnerProcessID == pid2) || (pid3 && te.th32OwnerProcessID == pid3)) && g_nfrozen < 256 && SuspendThread((HANDLE)te.th32ThreadID) != (DWORD)-1)
++				g_frozen[g_nfrozen++] = te.th32ThreadID;
++		} while (next(s, &te));
++	}
++	if (cls) cls(s);
++}
++
++static void thawUi() {
++	for (int i = 0; i < g_nfrozen; i++) ResumeThread((HANDLE)g_frozen[i]);
++	g_nfrozen = 0;
++}
++
++void OSystem_Zune::touchLoop() {
++	lyra_kernel_ensure_helpers();
++	DWORD pid = findPid("servicesd");
++	HANDLE h = pid ? OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid) : NULL;
++	DWORD base = 0, rd = 0;
++	if (h) ReadProcessMemory(h, (void *)ZAM_RING_BASE, &base, 4, &rd);
++	if (!h || !base) { zlog("touch: servicesd ring not found\n"); return; }
++
++	static DWORD prev[16 * 16], cur[512 * 16];   // the ring holds up to ~448 records of 64 bytes
++	memset(prev, 0, sizeof prev);
++	bool down = false, dragging = false, rcDone = false, holdL = false;   // holdL: long press is holding the left button (CMI verb coin)
++	DWORD homeDown = 0;                      // GetTickCount when the Home button went down (0 = up)
++	int nTouch = 0, nBeat = 0;               // touch records seen; heartbeat lines logged
++	int done = 0;                            // records of the current ring fill already processed (drain mode)
++	DWORD tStart = GetTickCount(), tBeat = tStart;
++	int zone = 0;                            // 1 = top-right (Esc), 2 = top-left (menu / hold to quit)
++	const int ZONE_W = 56, ZONE_H = 44;
++	int dx = 0, dy = 0, lx = 0, ly = 0;      // down point and last point (landscape)
++	DWORD tDown = 0;
++
++	while (!g_quit) {
++		// With gemstone frozen nobody drains the ring, so we do: every record in [base, head) is new.
++		DWORD head = 0;
++		ReadProcessMemory(h, (void *)(ZAM_CI3 + 0x20u), &head, 4, &rd);
++		bool drain = g_nfrozen > 0 && head >= base && head - base <= 0x8000;   // whole ring, not just the first 1KB
++		int cnt = drain ? (int)((head - base) / 64) : 16;
++		if (cnt > 512) cnt = 512;
++		if (ReadProcessMemory(h, (void *)base, cur, (DWORD)cnt * 64, &rd)) {
++			for (int s = drain ? done : 0; s < cnt; s++) {
++				DWORD *r = cur + s * 16, *p = prev + s * 16;
++				if (!drain && !memcmp(r, p, 64)) continue;
++				if (r[0] != 3 && r[0] != 4) {            // diagnostics: any non-touch, non-accelerometer record (buttons etc.)
++					static int nl = 0;
++					if (nl < 300) { nl++; char lb[140]; sprintf(lb, "ring s=%d t=%lu w1=%lx w2=%lx w3=%lx w4=%lx w5=%lx\n", s, r[0], r[1], r[2], r[3], r[4], r[5]); zlog(lb); }
++				}
++				if (r[0] == 2 && r[1] == 1) {          // hardware button: [2]=key code, [3]: 2 = pressed, 1 = released
++					// Home (0x24): the Zune reports a press as an instant down/up pair (no hold information), so:
++					// a press = Esc (skip cutscene); a second press within 600ms also opens the global menu (Quit/Save/Load).
++					// The side button (0x74) and power (0x5f) are left to the Zune (volume / screen).
++					if (r[2] == 0x24 && r[3] == 2) {
++						DWORD now = GetTickCount();
++						pushKey(Common::KEYCODE_ESCAPE, 27, 0);
++						if (homeDown && now - homeDown < 600) { pushKey(Common::KEYCODE_F5, 0, Common::KBD_CTRL); homeDown = 0; }
++						else homeDown = now;
++					}
++					continue;
++				}
++				if (r[0] != 3) continue;
++				nTouch++;
++				DWORD ph = r[2]; int c = (int)r[5];
++				int fx = (int)(r[3] & 0xffff), fy = (int)(r[4] & 0xffff);
++				int px = fx, py = fy;                // rotate portrait touch -> landscape
++				lx = py; ly = (ZuneGraphicsManager::LAND_H - 1) - px;
++				if (lx < 0) lx = 0; if (lx >= ZuneGraphicsManager::LAND_W) lx = ZuneGraphicsManager::LAND_W - 1;
++				if (ly < 0) ly = 0; if (ly >= ZuneGraphicsManager::LAND_H) ly = ZuneGraphicsManager::LAND_H - 1;
++				Common::Event e;
++				int mx, my;
++				if (ph == 1 && c == 1) {
++					down = true; dragging = false; rcDone = false; dx = lx; dy = ly; tDown = GetTickCount();
++					// corner zones are on-screen buttons, not game input
++					zone = (ly < ZONE_H && lx >= ZuneGraphicsManager::LAND_W - ZONE_W) ? 1 : (ly < ZONE_H && lx < ZONE_W) ? 2
++						: (ly >= ZuneGraphicsManager::LAND_H - ZONE_H && lx >= ZuneGraphicsManager::LAND_W - ZONE_W) ? 3 : 0;   // 3 = bottom-right: right click (CMI inventory)
++					if (!zone) {
++						gfx()->landscapeToMouse(lx, ly, mx, my);
++						e.type = Common::EVENT_MOUSEMOVE; e.mouse.x = mx; e.mouse.y = my; pushEvent(e);
++						gfx()->setMouse(mx, my);
++					}
++				} else if (ph == 1 && c == 0 && down && zone) {
++					// zone tap (short press): top-right = Esc (skip cutscene), top-left = global menu (Ctrl+F5)
++					if (GetTickCount() - tDown < 1500) {
++						if (zone == 1) pushKey(Common::KEYCODE_ESCAPE, 27, 0);
++						else if (zone == 3) {
++							gfx()->landscapeToMouse(lx, ly, mx, my);
++							e.mouse.x = mx; e.mouse.y = my;
++							e.type = Common::EVENT_RBUTTONDOWN; pushEvent(e);
++							e.type = Common::EVENT_RBUTTONUP; pushEvent(e);
++						} else pushKey(Common::KEYCODE_F5, 0, Common::KBD_CTRL);
++					}
++					zone = 0; down = false;
++				} else if (ph == 1 && c == 0 && down) {
++					gfx()->landscapeToMouse(lx, ly, mx, my);
++					if (holdL) {                        // end of a held left button: release where the finger is
++						e.mouse.x = mx; e.mouse.y = my; e.type = Common::EVENT_LBUTTONUP; pushEvent(e);
++						holdL = false;
++					} else if (!dragging && !rcDone) {        // a tap: click now
++						e.mouse.x = mx; e.mouse.y = my;
++						e.type = Common::EVENT_LBUTTONDOWN; pushEvent(e);
++						e.type = Common::EVENT_LBUTTONUP; pushEvent(e);
++					} else if (dragging) {
++						e.mouse.x = mx; e.mouse.y = my; e.type = Common::EVENT_LBUTTONUP; pushEvent(e);
++					}
++					down = false;
++				} else if (ph == 3 && down && !zone) {
++					gfx()->landscapeToMouse(lx, ly, mx, my);
++					if (!dragging && !rcDone && (abs(lx - dx) > 12 || abs(ly - dy) > 12)) {
++						dragging = true;
++						int ox, oy; gfx()->landscapeToMouse(dx, dy, ox, oy);
++						e.mouse.x = ox; e.mouse.y = oy; e.type = Common::EVENT_LBUTTONDOWN; pushEvent(e);
++					}
++					e.type = Common::EVENT_MOUSEMOVE; e.mouse.x = mx; e.mouse.y = my; pushEvent(e);
++					gfx()->setMouse(mx, my);
++				}
++			}
++			if (!drain) memcpy(prev, cur, sizeof prev);
++			else {
++				done = cnt;
++				DWORD head2 = 0;                     // only reset when nothing new was appended meanwhile (else next pass continues)
++				ReadProcessMemory(h, (void *)(ZAM_CI3 + 0x20u), &head2, 4, &rd);
++				if (head2 == head && cnt > 0) { WriteProcessMemory(h, (void *)(ZAM_CI3 + 0x20u), &base, 4, &rd); done = 0; }   // ring drained
++			}
++		}
++		// long press without movement -> right click
++		bool holdLeft = ConfMan.hasKey("gameid") && ConfMan.get("gameid") == "comi";   // CMI: hold = left button down
++		if (down && !zone && !dragging && !rcDone && GetTickCount() - tDown > (holdLeft ? 450 : 700)) {
++			int mx, my; gfx()->landscapeToMouse(lx, ly, mx, my);
++			Common::Event e; e.mouse.x = mx; e.mouse.y = my;
++			if (holdLeft) {
++				e.type = Common::EVENT_LBUTTONDOWN; pushEvent(e);
++				holdL = true;
++			} else {
++				e.type = Common::EVENT_RBUTTONDOWN; pushEvent(e);
++				e.type = Common::EVENT_RBUTTONUP; pushEvent(e);
++			}
++			rcDone = true;
++		}
++		// escape hatch: hold the top-left corner for 2.5s to quit ScummVM
++		if (nBeat < 25 && GetTickCount() - tBeat >= 3000) {      // heartbeat: is the touch path alive?
++			char hb[120]; nBeat++; tBeat = GetTickCount();
++			sprintf(hb, "touch beat: records=%d head=+%lx drain=%d frozen=%d\n", nTouch, head - base, (int)drain, g_nfrozen);
++			zlog(hb);
++			DWORD cw[24];                              // ci3 control structure: what does the input service think?
++			if (ReadProcessMemory(h, (void *)ZAM_CI3, cw, sizeof cw, &rd)) {
++				char b2[300]; int n2 = sprintf(b2, "  ci3:");
++				for (int i = 0; i < 24; i++) n2 += sprintf(b2 + n2, " %lx", cw[i]);
++				strcat(b2, "\n"); zlog(b2);
++			}
++		}
++		if (!nTouch && GetTickCount() - tStart > 120000) {         // safety net: touch never worked -> do not trap the user
++			zlog("touch: no input for 120s, quitting\n");
++			g_quit = true;
++		}
++		if (down && zone == 2 && GetTickCount() - tDown > 2500)
++			g_quit = true;
++		Sleep(2);
++	}
++	CloseHandle(h);
++}
++
++// ---- entry points -----------------------------------------------------------------------------
++static char g_args[600];
++
++static volatile bool g_running = false;
++
++static void *scummMain(void *) {
++	g_quit = false;
++	g_running = true;
++	// args: "gameid|path" starts that game directly; empty or "launcher" opens ScummVM's game list instead.
++	// Either way the config lists Day of the Tentacle so it can be picked from the launcher.
++	char gameid[64] = "tentacle", path[500] = "\\flash2\\scummvm\\games\\tentacle";
++	bool autostart = false;
++	char *bar = strchr(g_args, '|');
++	if (g_args[0] && strncmp(g_args, "launcher", 8) != 0) {
++		autostart = true;
++		if (bar) { *bar = 0; strncpy(gameid, g_args, 63); strncpy(path, bar + 1, 499); }
++		else strncpy(gameid, g_args, 63);
++	}
++	CreateDirectoryW(L"\\flash2\\scummvm", NULL);
++	CreateDirectoryW(L"\\flash2\\scummvm\\saves", NULL);
++	HANDLE f = CreateFileW(L"\\flash2\\scummvm\\scummvm.ini", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++	if (f != INVALID_HANDLE_VALUE) {
++		// Every game whose data is present under games\<id>\ shows up in the launcher.
++		static const char *known[][2] = { { "tentacle", "TENTACLE.000" }, { "samnmax", "SAMNMAX.000" }, { "comi", "COMI.LA0" } };
++		const int NKNOWN = 3;
++		char ini[2400];
++		int n = sprintf(ini, "[scummvm]\nsavepath=\\flash2\\scummvm\\saves\nmusic_driver=adlib\n\n");
++		bool listed = false;
++		for (int i = 0; i < NKNOWN; i++) {
++			char gp[300]; WCHAR wp[320];
++			sprintf(gp, "\\flash2\\scummvm\\games\\%s\\%s", known[i][0], known[i][1]);
++			MultiByteToWideChar(CP_ACP, 0, gp, -1, wp, 320);
++			if (GetFileAttributesW(wp) == 0xFFFFFFFFu) continue;
++			n += sprintf(ini + n, "[%s]\ngameid=%s\npath=\\flash2\\scummvm\\games\\%s\nlanguage=en\nplatform=pc\n\n", known[i][0], known[i][0], known[i][0]);
++			if (!strcmp(known[i][0], gameid)) listed = true;
++		}
++		if (autostart && !listed)   // an explicitly requested game outside the scanned list
++			n += sprintf(ini + n, "[%s]\ngameid=%s\npath=%s\nlanguage=en\nplatform=pc\n\n", gameid, gameid, path);
++		DWORD w; WriteFile(f, ini, n, &w, NULL); CloseHandle(f);
++	}
++	static char a0[] = "scummvm", a1[] = "-c", a2[] = "\\flash2\\scummvm\\scummvm.ini";
++	static char *argv[] = { a0, a1, a2, gameid, NULL };
++	zlog("scummvm: starting\n");
++	freezeUi();
++	{ char fm[48]; sprintf(fm, "scummvm: froze %d UI threads\n", g_nfrozen); zlog(fm); }
++	g_system = new OSystem_Zune();
++	int res = scummvm_main(autostart ? 4 : 3, argv);   // argv[3] (the game id) only when autostarting
++	zlog("scummvm: main returned\n");
++	g_quit = true;          // stop the helper threads before their objects go away
++	Sleep(400);
++	zlog("scummvm: helpers stopped\n");
++	thawUi();               // give the Zune UI back first, before anything else can go wrong
++	zlog("scummvm: UI thawed\n");
++	g_system->destroy();
++	g_system = NULL;
++	zlog("scummvm: system destroyed\n");
++	char m[64]; sprintf(m, "scummvm: exited %d\n", res); zlog(m);
++	g_running = false;
++	return (void *)res;
++}
++
++static int runScumm(const void *arg, int arg_len) {
++	memset(g_args, 0, sizeof g_args);
++	if (arg && arg_len > 0) memcpy(g_args, arg, arg_len < 599 ? arg_len : 599);
++	const DWORD SZ = 4u << 20;
++	byte *blk = (byte *)VirtualAlloc(NULL, SZ, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++	if (!blk) return -1;
++	int r = (int)call_on_stack(scummMain, NULL, blk + SZ - 16);
++	VirtualFree(blk, 0, MEM_RELEASE);
++	return r;
++}
++
++static HANDLE g_hinst = NULL;
++
++// Keep this DLL loaded for the life of the process. Unloading would run ScummVM's global C++
++// destructors a second time (ScummVM cleans its singletons itself), which crashed the daemon.
++static void pinSelf() {
++	WCHAR path[MAX_PATH];
++	if (g_hinst && GetModuleFileNameW((HMODULE)g_hinst, path, MAX_PATH)) LoadLibraryW(path);
++}
++
++extern "C" __declspec(dllexport) int RunDaemon(const void *arg, int arg_len, HANDLE stop_event) {
++	g_stop = stop_event;
++	pinSelf();
++	return runScumm(arg, arg_len);
++}
++
++// One-shot entry: starts ScummVM on its own thread and returns at once so the daemon stays usable.
++// Run("stop") quits it; Run("status") reports. Anything else is "gameid|\\path".
++extern "C" __declspec(dllexport) int Run(const void *arg, int arg_len, void *out, int out_max, int *out_used) {
++	const char *m;
++	int rc = 0;
++	if (arg_len >= 4 && !memcmp(arg, "stop", 4)) {
++		g_quit = true; m = "stop requested";
++	} else if (arg_len >= 6 && !memcmp(arg, "status", 6)) {
++		m = g_running ? "running" : "not running";
++	} else if (g_running) {
++		m = "already running"; rc = 1;
++	} else {
++		memset(g_args, 0, sizeof g_args);
++		if (arg && arg_len > 0) memcpy(g_args, arg, arg_len < 599 ? arg_len : 599);
++		if (!g_stop) g_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
++		g_running = true;
++		if (startStackThread(scummMain, NULL, 4u << 20)) m = "started"; else { g_running = false; m = "thread start failed"; rc = -1; }
++	}
++	int n = (int)strlen(m); if (n > out_max) n = out_max;
++	if (out && out_used) { memcpy(out, m, n); *out_used = n; }
++	return rc;
++}
++
++extern "C" BOOL WINAPI DllMain(HANDLE h, DWORD reason, LPVOID) {
++	if (reason == DLL_PROCESS_ATTACH) g_hinst = h;
++	return TRUE;
++}
++
++#else /* USE_ZUNE_DRIVER */
++OSystem *OSystem_Zune_create() { return NULL; }
++#endif
+diff --git a/base/main.cpp b/base/main.cpp
+index 352dbf9ab4..db2fc6e363 100644
+--- a/base/main.cpp
++++ b/base/main.cpp
+@@ -77,9 +77,7 @@
+ #endif
+ #endif
+ 
+-#if defined(_WIN32_WCE)
+-#include "backends/platform/wince/CELauncherDialog.h"
+-#elif defined(__DC__)
++#if defined(__DC__)
+ #include "backends/platform/dc/DCLauncherDialog.h"
+ #else
+ #include "gui/launcher.h"
+@@ -96,9 +94,7 @@ static bool launcherDialog() {
+ 	// blindly be passed to the first game launched from the launcher.
+ 	ConfMan.getDomain(Common::ConfigManager::kTransientDomain)->clear();
+ 
+-#if defined(_WIN32_WCE)
+-	CELauncherDialog dlg;
+-#elif defined(__DC__)
++#if defined(__DC__)
+ 	DCLauncherDialog dlg;
+ #else
+ 	GUI::LauncherDialog dlg;
+diff --git a/configure b/configure
+index 5de54af667..2b719455b8 100755
+--- a/configure
++++ b/configure
+@@ -2953,11 +2953,9 @@ case $_host_os in
+ 		append_var DEFINES "-DUNICODE"
+ 		append_var DEFINES "-DFPM_DEFAULT"
+ 		append_var DEFINES "-DNONSTANDARD_PORT"
+-		append_var DEFINES "-DWRAP_MALLOC"
+ 		append_var DEFINES "-DWIN32"
+ 		append_var DEFINES "-Dcdecl="
+ 		append_var DEFINES "-D__cdecl__="
+-		add_line_to_config_mk "WRAP_MALLOC = 1"
+ 		;;
+ esac
+ 
+@@ -3434,10 +3432,9 @@ if test -n "$_host"; then
+ 			if test "$_tremor" = auto; then
+ 				_tremolo=yes
+ 			fi
+-			_backend="wince"
++			_backend="zune"
+ 			_detectlang=yes
+ 			_mt32emu=no
+-			_port_mk="backends/platform/wince/wince.mk"
+ 			;;
+ 		*)
+ 			echo "WARNING: Unknown target, continuing with auto-detected values"
+@@ -3623,14 +3620,10 @@ case $_backend in
+ 			;;
+ 		esac
+ 		;;
+-	wince)
+-		append_var INCLUDES '-I$(srcdir)/backends/platform/wince'
+-		append_var INCLUDES '-I$(srcdir)/backends/platform/wince/CEgui'
+-		append_var INCLUDES '-I$(srcdir)/backends/platform/wince/CEkeys'
+-		append_var INCLUDES '-I$(srcdir)/backends/platform/wince/missing'
+-		append_var LIBS "-static -lSDL"
+-		_sdl=yes
+-		_sdlversion=1.2.0
++	zune)
++		append_var DEFINES "-DUSE_ZUNE_DRIVER"
++		append_var INCLUDES '-I$(srcdir)/backends/platform/zune'
++		append_var LDFLAGS "-shared -static-libgcc -static-libstdc++"
+ 		;;
+ 	*)
+ 		echo "support for $_backend backend not implemented in configure script yet"

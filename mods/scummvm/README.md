@@ -100,6 +100,24 @@ Load, Quit). Top-right button = skip cutscene (Esc).
 * A first, simpler launch method exists (start from the PC with `lyra-plugin-daemon.py spawn ... RunDaemon`, shell
   frozen, Home button works as skip and double-press as menu, no restart on quit). It is not packaged here.
 
+## Curse of Monkey Island (SCUMM v8) build
+
+`scummvm-zune-port-cmi.patch` is the same port plus the **v7/v8 engine** and a few CMI-specific changes. It is a full diff
+against `bcef809e61` (apply it *instead of* `scummvm-zune-port.patch`, not on top). Configure exactly as above but with
+`--enable-engine=scumm,scumm-7-8`. Output is a DLL like before (~5 MB); the tile's `scummvm-zune.dll` can be this one
+(it still runs Day of the Tentacle and Sam & Max). Keep the old DLL as a rollback.
+
+* **Game:** id `comi`, data in `lash2\scummvm\games\comi\` (`COMI.LA0/1/2` and the `RESOURCE\` folder, ~1.2 GB, bring
+  your own discs). Disc 1 of the usual 2-CD rip is MODE2/2336: `tools/extract_iso2336.py` extracts it, `7z` handles disc 2.
+  `tools/upload_cmi.py` uploads everything over Wi-Fi in playable-first order and resumes after drops (the Zune takes one
+  connection at a time and drops Wi-Fi when its screen sleeps).
+* **Touch in CMI:** press and hold (~0.45 s) holds the **left** button until you lift your finger, which is how CMI's
+  verb coin works (slide to a verb and let go). A right click (the CMI inventory) is the box icon in the **bottom-right**
+  corner. Other games keep long press = right click.
+* **Known issue:** the Zune crashes when exiting CMI (not yet diagnosed).
+* Without the Apps tile you can still start it from the PC: `lyra-plugin-daemon.py spawn <ip> <dll> --entry RunDaemon
+  --arg "comi|lash2\scummvm\games\comi"`.
+
 ## Licence
 
 ScummVM is GPL-2.0-or-later; `scummvm-zune-port.patch` is a derivative of ScummVM and is under the same licence.
