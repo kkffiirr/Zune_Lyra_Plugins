@@ -17,3 +17,8 @@ GNU GPL v2 or later; the patch is under the same licence. It also carries Projec
 lyra_client.cpp, MIT). mods/scummvm/app/ is the OpenZDK native-app launcher by itsnotabigtruck (BSD 3-clause; see the
 file headers). No game data is included: the ScummVM mod needs your own copy of the games. "ScummVM" and the ScummVM
 icon belong to the ScummVM team; the Zune logo belongs to Microsoft and is not included.
+
+Credits (see also the README): Project Lyra by magicisinthehole and contributors (MIT,
+https://github.com/project-lyra-zune/project-lyra); OpenZDK by itsnotabigtruck (BSD 3-clause; copy at
+https://github.com/ZuneRedux/openZDK-quick-start-kit); CeGCC (https://github.com/cegcc/cegcc); ScummVM (GPL v2+);
+XUIHelper by SGCSam (https://github.com/SGCSam/XUIHelper) and its Zune HD fork in the Lyra mod kit.

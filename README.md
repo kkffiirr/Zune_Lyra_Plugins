@@ -36,6 +36,18 @@ builds them locally from your own Windows fonts and the Zune HD 4.5 firmware ima
 `PavoBaseline.cab`, available from Microsoft's firmware package / the Internet Archive item
 `updating-the-zune-firmware`).
 
+## Credits
+
+None of this exists without the people who built the platform it runs on:
+
+- **[Project Lyra](https://github.com/project-lyra-zune/project-lyra)** by **magicisinthehole** and the Project Lyra contributors: the modding platform for the Zune HD, its SDK, mod kit and mod format. Every mod here is a Lyra mod. (MIT)
+- **OpenZDK** by **itsnotabigtruck**: the open Zune HD native development kit (2010) that made native code on the device possible. The XNA launcher in `mods/scummvm/app/` is his. Copy: [ZuneRedux/openZDK-quick-start-kit](https://github.com/ZuneRedux/openZDK-quick-start-kit). (BSD 3-clause)
+- **[CeGCC](https://github.com/cegcc/cegcc)** developers: the `arm-mingw32ce` cross compiler used for all native code here.
+- **[ScummVM](https://www.scummvm.org/)** team: the SCUMM engine behind the `scummvm` mod. (GPL v2+)
+- **XUIHelper** (SGCSam, and the Zune HD fork in the Lyra mod kit) for the XUI scene tooling, and the wider Zune HD modding community whose research this builds on.
+
+Full notices are in [THIRD-PARTY.md](THIRD-PARTY.md).
+
 ## Safety
 
 Mods run inside the Zune's UI process. A bad one can crash-loop the device. Keep `tools/disable-mod.py` and
