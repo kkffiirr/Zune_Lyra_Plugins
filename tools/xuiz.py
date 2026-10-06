@@ -1,4 +1,9 @@
-"""Minimal XUIZ (.gem) reader, ported from lyra-src/src/zuxhook/formats/mods_xuiz.c (decode only)."""
+"""Minimal XUIZ (.gem) reader (decode only).
+
+Ported from Project Lyra's src/zuxhook/formats/mods_xuiz.c
+(https://github.com/project-lyra-zune/project-lyra), MIT License,
+Copyright (c) 2026 magicisinthehole and the Project Lyra contributors.
+See the LICENSE file for the full notice."""
 import struct
 
 def u16be(b, o): return struct.unpack_from(">H", b, o)[0]
