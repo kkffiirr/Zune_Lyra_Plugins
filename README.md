@@ -11,7 +11,8 @@ platform for the **Zune HD (firmware 4.5)**. Tested on Lyra 1.4.0. Native code i
 | [`regprobe`](mods/regprobe), [`fontprobe`](mods/fontprobe) | diagnostics | Read-only logs of the font registry / font list. |
 | `playnext` | builds | Lyra's own Play Next mod rebuilt with CeGCC (`./build.sh playnext`); untested on a device. |
 
-See [docs/LESSONS.md](docs/LESSONS.md) for everything learned about the device and the platform, and
+The full, reproducible account of the font work (firmware extraction, font building, what failed and why, the font-link fix, with reference values to check against) is
+[docs/FONTS-HOWTO.md](docs/FONTS-HOWTO.md). See also [docs/LESSONS.md](docs/LESSONS.md) for everything learned about the device and the platform, and
 [docs/INSTALL.md](docs/INSTALL.md) for the full set-up and deploy recipe, and
 [docs/OTHER-LANGUAGES.md](docs/OTHER-LANGUAGES.md) for how to reproduce this for Arabic, Cyrillic, Greek, Thai and others (and what is not feasible).
 
@@ -47,7 +48,7 @@ enabling anything new, and test one change per restart.
 mods/<id>/          manifest.json + C sources (binaries and fonts are generated, git-ignored)
 build.sh            cross-compile a mod's native parts with CeGCC
 tools/              deploy/verify/log helpers (Python), font builder, USB recovery loop
-docs/               INSTALL.md, LESSONS.md
+docs/               INSTALL.md, FONTS-HOWTO.md, LESSONS.md, OTHER-LANGUAGES.md
 ```
 
 Licence: [MIT](LICENSE) for the code and notes in this repository (`tools/xuiz.py` credits Project Lyra, also MIT; see [THIRD-PARTY.md](THIRD-PARTY.md)).

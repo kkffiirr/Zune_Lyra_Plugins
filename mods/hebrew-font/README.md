@@ -12,3 +12,5 @@ Parts:
 
 The eight `.ttf` files are **not in the repo** (Microsoft-derived). Generate them with `python tools/make-fonts.py <EXT.bin>`, build the
 native parts with `./build.sh hebrew-font`, then deploy. Hebrew shows right-to-left-reversed (the UI has no bidi), see `hebrew-rtl`.
+
+Full step-by-step account, reference hashes and the list of approaches that failed: [`docs/FONTS-HOWTO.md`](../../docs/FONTS-HOWTO.md).
