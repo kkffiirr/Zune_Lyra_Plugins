@@ -107,7 +107,7 @@ against `bcef809e61` (apply it *instead of* `scummvm-zune-port.patch`, not on to
 `--enable-engine=scumm,scumm-7-8`. Output is a DLL like before (~5 MB); the tile's `scummvm-zune.dll` can be this one
 (it still runs Day of the Tentacle and Sam & Max). Keep the old DLL as a rollback.
 
-* **Game:** id `comi`, data in `lash2\scummvm\games\comi\` (`COMI.LA0/1/2` and the `RESOURCE\` folder, ~1.2 GB, bring
+* **Game:** id `comi`, data in `\flash2\scummvm\games\comi\` (`COMI.LA0/1/2` and the `RESOURCE\` folder, ~1.2 GB, bring
   your own discs). Disc 1 of the usual 2-CD rip is MODE2/2336: `tools/extract_iso2336.py` extracts it, `7z` handles disc 2.
   `tools/upload_cmi.py` uploads everything over Wi-Fi in playable-first order and resumes after drops (the Zune takes one
   connection at a time and drops Wi-Fi when its screen sleeps).
@@ -116,7 +116,7 @@ against `bcef809e61` (apply it *instead of* `scummvm-zune-port.patch`, not on to
   corner. Other games keep long press = right click.
 * **Known issue:** the Zune crashes when exiting CMI (not yet diagnosed).
 * Without the Apps tile you can still start it from the PC: `lyra-plugin-daemon.py spawn <ip> <dll> --entry RunDaemon
-  --arg "comi|lash2\scummvm\games\comi"`.
+  --arg "comi|\flash2\scummvm\games\comi"`.
 
 ## Licence
 
