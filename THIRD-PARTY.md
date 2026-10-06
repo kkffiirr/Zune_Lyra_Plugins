@@ -1,7 +1,5 @@
 # Third-party notices
 
-Third-party notices
-
 tools/xuiz.py is a Python port of the XUIZ (.gem) container reader from
 Project Lyra (src/zuxhook/formats/mods_xuiz.c), which is licensed under the
 MIT License:
