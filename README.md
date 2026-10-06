@@ -10,6 +10,7 @@ platform for the **Zune HD (firmware 4.5)**. Tested on Lyra 1.4.0. Native code i
 | [`hebrew-rtl`](mods/hebrew-rtl) | experimental, **crashed the UI** | Visually reorders Hebrew text (the Zune draws everything left-to-right). The flip logic is unit-tested; the on-device hook crashed when scrolling and needs a rewrite. Do not enable. |
 | [`regprobe`](mods/regprobe), [`fontprobe`](mods/fontprobe) | diagnostics | Read-only logs of the font registry / font list. |
 | `playnext` | builds | Lyra's own Play Next mod rebuilt with CeGCC (`./build.sh playnext`); untested on a device. |
+| [`scummvm`](mods/scummvm) | **works, with known issues** | ScummVM (SCUMM v0-v6: Day of the Tentacle, Sam & Max) as a tile in the Apps list. Touch controls; quitting restarts the Zune and hardware buttons stop touch. See its README. |
 
 The full, reproducible account of the font work (firmware extraction, font building, what failed and why, the font-link fix, with reference values to check against) is
 [docs/FONTS-HOWTO.md](docs/FONTS-HOWTO.md). See also [docs/LESSONS.md](docs/LESSONS.md) for everything learned about the device and the platform, and
@@ -45,7 +46,7 @@ enabling anything new, and test one change per restart.
 ## Layout
 
 ```
-mods/<id>/          manifest.json + C sources (binaries and fonts are generated, git-ignored)
+mods/<id>/          manifest.json + C sources (binaries and fonts are generated, git-ignored; scummvm/ is an XNA app + patch instead)
 build.sh            cross-compile a mod's native parts with CeGCC
 tools/              deploy/verify/log helpers (Python), font builder, USB recovery loop
 docs/               INSTALL.md, FONTS-HOWTO.md, LESSONS.md, OTHER-LANGUAGES.md
