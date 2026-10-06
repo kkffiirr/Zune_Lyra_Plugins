@@ -1,63 +1,235 @@
-/* rtlflip: Lyra mod DLL (load_module into gemstone, init RtlFlipInstall), firmware 4.5.
- * Hooks the UI's label-text setter (0x38434) and list-row text setter (0x83914); when the text
- * contains Hebrew, passes the visually reordered text instead. Latin-only text is passed untouched. */
+/* rtlflip v0.2: Hebrew visual-order flip for the Zune UI (gemstone, firmware 4.5), staged and self-disarming.
+ *
+ * Only hooks 0x38434 SetLabelText(elem, text): its first two instructions are position-independent
+ * (checked offline with hookcheck.py, and re-verified here against the exact expected words before patching).
+ * The old 0x83914 hook is gone: it was a PC-relative import thunk to a generic string copy and crashed the UI.
+ *
+ * Stage is read from \flash2\automation\rtlflip.stage (first char), default A:
+ *   A = guard + log only, NO hooks installed
+ *   B = hook installed, text passed through unchanged, Hebrew strings logged
+ *   C = hook installed, Hebrew text flipped
+ *   R = P plus: Hebrew text passing through the copy at an ALLOWED call site (ROW_LR[]) is flipped (once; memo-guarded)
+ *   P = C plus a LOG-ONLY probe on the string-copy import (gemstone IAT slot 0x962a8): records which callers (LR) pass Hebrew
+ *       text through it. It never changes the text. Used to find which of the 88 call sites are list rows.
+ * Guard: before patching, \flash2\automation\rtlflip.armed is created. It is deleted after ARM_SECONDS of uptime.
+ * If it still exists at the next load (= the UI died inside that window) no hook is installed, the file is renamed
+ * to rtlflip.tripped and the mod stays inert until that file is deleted. */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include "lyra.h"
 #include "flip_core.h"
 
-#define VA_SET_LABEL 0x00038434u   /* HRESULT SetLabelText(void* elem, const wchar_t* text) */
-#define VA_ROW_LABEL 0x00083914u   /* HRESULT RawRowLabel(DWORD out8, DWORD outc, const wchar_t* text) */
-#define LOGPATH L"\\flash2\\automation\\rtlflip.log"
-#define LOG_LIMIT 120
+#define VA_SET_LABEL   0x00038434u
+#define WORD0_EXPECT   0xe92d4010u   /* push {r4, lr}          */
+#define WORD1_EXPECT   0xe24dd048u   /* sub sp, sp, #0x48      */
+#define ARM_SECONDS    300
+#define LOG_LIMIT      400
+#define IAT_COPY       0x000962a8u   /* gemstone import slot -> coredll StringCchCopyW(dest, cch, src), 3 args, checked offline */
+#define IAT_COPY_EXPECT 0x4035d744u
+#define IAT_COPYEX     0x00096228u   /* -> coredll StringCchCopyExW(dest, cch, src, pEnd, pRemain, flags): 6 args, checked offline */
+#define IAT_COPYEX_EXPECT 0x4035d790u
+#define RING           32
+
+#define DIR       L"\\flash2\\automation\\"
+#define F_LOG     DIR L"rtlflip.log"
+#define F_STAGE   DIR L"rtlflip.stage"
+#define F_ARMED   DIR L"rtlflip.armed"
+#define F_TRIPPED DIR L"rtlflip.tripped"
 
 typedef HRESULT (*LabelFn)(void* elem, const wchar_t* text);
-typedef HRESULT (*RowFn)(DWORD a, DWORD b, const wchar_t* text);
-static LabelFn g_next_label;
-static RowFn   g_next_row;
-static volatile LONG g_logged;
+static LabelFn g_next;
+static volatile LONG g_logged, g_ring;
+static volatile int g_flip;                       /* 1 only in stage C */
+static wchar_t g_buf[RING][FLIP_MAX];             /* permanent copies: never freed, so no dangling pointer possible */
 
 static void LG(const char* fmt, ...) {
-    char buf[400]; int n; DWORD w; HANDLE h; va_list ap;
-    n = 0;
-    va_start(ap, fmt); n += vsnprintf(buf + n, sizeof(buf) - 4, fmt, ap); va_end(ap);
+    char buf[300]; int n; DWORD w; HANDLE h; va_list ap;
+    va_start(ap, fmt); n = vsnprintf(buf, sizeof(buf) - 3, fmt, ap); va_end(ap);
+    if (n < 0) n = 0;
     buf[n++] = '\r'; buf[n++] = '\n';
-    h = CreateFileW(LOGPATH, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    h = CreateFileW(F_LOG, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
     SetFilePointer(h, 0, NULL, FILE_END);
     WriteFile(h, buf, n, &w, NULL);
     CloseHandle(h);
 }
 
-static void log_flip(const char* tag, const wchar_t* in) {
-    char u8[200]; int n;
-    if (InterlockedIncrement(&g_logged) > LOG_LIMIT) return;
-    n = WideCharToMultiByte(CP_UTF8, 0, in, -1, u8, sizeof(u8) - 1, NULL, NULL);
-    if (n <= 0) n = 1;
-    u8[n < (int)sizeof(u8) ? n : (int)sizeof(u8) - 1] = 0;
-    LG("%s: flipped \"%s\"", tag, u8);
+static int exists(const wchar_t* p) { return GetFileAttributesW(p) != 0xFFFFFFFFu; }
+
+static void touch(const wchar_t* p) {
+    HANDLE h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+}
+
+static char read_stage(void) {
+    char c = 'A'; DWORD got = 0;
+    HANDLE h = CreateFileW(F_STAGE, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 'A';
+    if (ReadFile(h, &c, 1, &got, NULL) && got == 1 && c >= 'a' && c <= 'z') c -= 32;
+    CloseHandle(h);
+    return (got == 1 && (c == 'B' || c == 'C' || c == 'P' || c == 'R')) ? c : 'A';
+}
+
+static volatile LONG g_n_label, g_n_flip, g_n_skip;
+static unsigned g_seen[512]; static volatile LONG g_seen_n;
+/* returns 1 the first time a key is seen (so each distinct line is logged once) */
+static int first_time(unsigned key) {
+    int i, n = g_seen_n;
+    for (i = 0; i < n && i < 512; i++) if (g_seen[i] == key) return 0;
+    if (n >= 512) return 0;
+    g_seen[InterlockedIncrement(&g_seen_n) - 1 & 511] = key;
+    return 1;
+}
+static void u8(const wchar_t* w, char* o, int cap) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, o, cap - 1, NULL, NULL);
+    if (n < 0) n = 0; o[n] = 0;
+}
+static void log_text(const wchar_t* in, const wchar_t* out) {
+    char a[160], b[160]; int l; unsigned k = memo_hash(in, &l);
+    if (!first_time(k) || g_logged >= LOG_LIMIT) return;
+    InterlockedIncrement(&g_logged);
+    u8(in, a, sizeof a); u8(out, b, sizeof b);
+    LG("label[%s] in=\"%s\" out=\"%s\"", g_flip ? "flip" : "pass", a, b);
 }
 
 static HRESULT H_label(void* elem, const wchar_t* text) {
-    wchar_t buf[FLIP_MAX];
-    if (text && rtl_flip(text, buf, FLIP_MAX)) { log_flip("label", text); return g_next_label(elem, buf); }
-    return g_next_label(elem, text);
+    if (InterlockedIncrement(&g_n_label) % 300 == 0) LG("stats label=%ld flip=%ld skip=%ld", g_n_label, g_n_flip, g_n_skip);
+    if (text && !((DWORD)text & 1)) {
+        /* flip only when there is Hebrew; rtl_flip leaves out[] untouched and returns 0 otherwise */
+        wchar_t* out = g_buf[(InterlockedIncrement(&g_ring) & 0x7fffffff) % RING];
+        if (memo_has(text)) {                        /* already our output: it is in visual order, leave it */
+            InterlockedIncrement(&g_n_skip);
+            { int l; unsigned k = memo_hash(text, &l) ^ 0x5a5a5a5au;
+              if (first_time(k) && g_logged < LOG_LIMIT) { char a[160]; InterlockedIncrement(&g_logged); u8(text, a, sizeof a); LG("label[skip] already-flipped: \"%s\"", a); } }
+        } else if (rtl_flip(text, out, FLIP_MAX)) {
+            log_text(text, out);
+            if (g_flip) { InterlockedIncrement(&g_n_flip); memo_add(out); return g_next(elem, out); }
+        }
+    }
+    return g_next(elem, text);
 }
 
-static HRESULT H_row(DWORD a, DWORD b, const wchar_t* text) {
-    wchar_t buf[FLIP_MAX];
-    if (text && rtl_flip(text, buf, FLIP_MAX)) { log_flip("row", text); return g_next_row(a, b, buf); }
-    return g_next_row(a, b, text);
+/* ---- stage P: log-only probe on the string-copy import ---- */
+typedef DWORD (*CopyFn)(DWORD dest, DWORD cch, DWORD src);
+static CopyFn g_copy_orig;
+static volatile int g_row_flip;                       /* stage R */
+static const DWORD ROW_LR[] = { 0x00027de8u };        /* return addresses of list-row copy sites (from probe logs) */
+static volatile LONG g_n_row;
+static wchar_t g_rowbuf[RING][FLIP_MAX];
+static volatile LONG g_rowring;
+static volatile LONG g_probe_logged;
+static void probe(const char* tag, const wchar_t* t, DWORD lr, DWORD cch) {
+    int i, heb = 0, n; unsigned k; char a[160];
+    if (!t || ((DWORD)t & 1) || (DWORD)t < 0x10000 || IsBadReadPtr(t, 2)) return;
+    for (i = 0; i < 64 && t[i]; i++) if (IS_HEB(t[i])) { heb = 1; break; }
+    if (!heb) return;
+    k = memo_hash(t, &n) * 31u + lr + (tag[4] == 'e' ? 7u : 0u);
+    if (!first_time(k ^ 0xc0ffee00u) || g_probe_logged >= 250) return;
+    InterlockedIncrement(&g_probe_logged);
+    u8(t, a, sizeof a);
+    LG("%s lr=%08lx cch=%lu in=\"%s\"", tag, lr, cch, a);
+}
+static DWORD W_copy(DWORD dest, DWORD cch, DWORD src) {
+    DWORD lr = (DWORD)__builtin_return_address(0);
+    probe("copy ", (const wchar_t*)src, lr, cch);
+    if (g_row_flip && src && !(src & 1) && src >= 0x10000 && !IsBadReadPtr((void*)src, 2)) {
+        int i;
+        for (i = 0; i < (int)(sizeof ROW_LR / sizeof ROW_LR[0]); i++) if (ROW_LR[i] == lr) {
+            const wchar_t* t = (const wchar_t*)src;
+            wchar_t* out = g_rowbuf[(InterlockedIncrement(&g_rowring) & 0x7fffffff) % RING];
+            if (!memo_has(t) && rtl_flip(t, out, FLIP_MAX) && wcslen(out) < cch) {   /* callee copies at once; output never longer than input */
+                InterlockedIncrement(&g_n_row); memo_add(out);
+                if ((g_n_row & 63) == 1) LG("row-flip #%ld at lr=%08lx", g_n_row, lr);
+                return g_copy_orig(dest, cch, (DWORD)out);
+            }
+            break;
+        }
+    }
+    return g_copy_orig(dest, cch, src);
+}
+
+typedef DWORD (*CopyExFn)(DWORD, DWORD, DWORD, DWORD, DWORD, DWORD);
+static CopyExFn g_copyex_orig;
+static const DWORD EXROW_LR[] = { 0x000295d4u };      /* now-playing "next songs" builder: one title per call, joined with 
+ by the caller */
+static volatile LONG g_n_exrow;
+static DWORD W_copyex(DWORD dest, DWORD cch, DWORD src, DWORD pend, DWORD prem, DWORD flags) {
+    DWORD lr = (DWORD)__builtin_return_address(0);
+    probe("copyex", (const wchar_t*)src, lr, cch);
+    if (g_row_flip && src && !(src & 1) && src >= 0x10000 && !IsBadReadPtr((void*)src, 2)) {
+        int i;
+        for (i = 0; i < (int)(sizeof EXROW_LR / sizeof EXROW_LR[0]); i++) if (EXROW_LR[i] == lr) {
+            const wchar_t* t = (const wchar_t*)src;
+            wchar_t* out = g_rowbuf[(InterlockedIncrement(&g_rowring) & 0x7fffffff) % RING];
+            if (!memo_has(t) && rtl_flip(t, out, FLIP_MAX) && wcslen(out) < cch) {   /* same length as input, copied at once */
+                InterlockedIncrement(&g_n_exrow); memo_add(out);
+                if ((g_n_exrow & 63) == 1) LG("exrow-flip #%ld at lr=%08lx", g_n_exrow, lr);
+                return g_copyex_orig(dest, cch, (DWORD)out, pend, prem, flags);
+            }
+            break;
+        }
+    }
+    return g_copyex_orig(dest, cch, src, pend, prem, flags);
+}
+
+/* Clears the armed flag after ARM_SECONDS of healthy uptime. */
+static DWORD WINAPI Disarm(LPVOID p) {
+    (void)p;
+    Sleep(ARM_SECONDS * 1000);
+    DeleteFileW(F_ARMED);
+    LG("disarmed after %d s of uptime: stable", ARM_SECONDS);
+    return 0;
 }
 
 __declspec(dllexport) int RtlFlipInstall(void) {
-    int rc1, rc2;
-    LG("==== RtlFlipInstall: loaded (pid=%lu) runtime=%d", GetCurrentProcessId(), lyra_runtime_available());
-    rc1 = lyra_hook_install(VA_SET_LABEL, (void*)&H_label, (void**)&g_next_label);
-    rc2 = lyra_hook_install(VA_ROW_LABEL, (void*)&H_row,   (void**)&g_next_row);
-    LG("hook SetLabelText rc=%d, RawRowLabel rc=%d", rc1, rc2);
-    return (rc1 == 0 || rc2 == 0) ? 0 : -1;
+    char stage; DWORD w0, w1; HANDLE t;
+    LG("==== RtlFlipInstall v0.2 loaded (pid=%lu) runtime=%d", GetCurrentProcessId(), lyra_runtime_available());
+
+    if (exists(F_TRIPPED)) { LG("INERT: rtlflip.tripped exists (delete it to re-enable). no hooks."); return 0; }
+    if (exists(F_ARMED)) {
+        LG("TRIPPED: armed flag still present = previous run died inside the %d s window. no hooks.", ARM_SECONDS);
+        MoveFileW(F_ARMED, F_TRIPPED);
+        return 0;
+    }
+    stage = read_stage();
+    LG("stage=%c", stage);
+    if (stage == 'A') return 0;                    /* guard-only: proves loading + file handling, patches nothing */
+
+    w0 = *(volatile DWORD*)VA_SET_LABEL;           /* gemstone's own code, always mapped in this process */
+    w1 = *(volatile DWORD*)(VA_SET_LABEL + 4);
+    if (w0 != WORD0_EXPECT || w1 != WORD1_EXPECT) {
+        LG("ABORT: target bytes %08lx %08lx != expected (different firmware?). no hooks.", w0, w1);
+        return -1;
+    }
+    g_flip = (stage == 'C' || stage == 'P' || stage == 'R');
+    touch(F_ARMED);
+    if (!exists(F_ARMED)) { LG("ABORT: cannot create armed flag, refusing to hook without the guard"); return -1; }
+    {
+        int rc = lyra_hook_install(VA_SET_LABEL, (void*)&H_label, (void**)&g_next);
+        LG("hook SetLabelText rc=%d flip=%d", rc, g_flip);
+        if (rc != 0 || !g_next) { DeleteFileW(F_ARMED); return -1; }
+    }
+    if (stage == 'P' || stage == 'R') {
+        g_row_flip = (stage == 'R');
+        DWORD cur = *(volatile DWORD*)IAT_COPY;
+        if (cur != IAT_COPY_EXPECT) LG("probe skipped: IAT slot holds %08lx, expected %08lx", cur, IAT_COPY_EXPECT);
+        else {
+            g_copy_orig = (CopyFn)cur;                     /* set before redirecting: a call landing on the wrapper must already see it */
+            *(volatile DWORD*)IAT_COPY = (DWORD)&W_copy;
+            LG("probe installed on string-copy import");
+        }
+        cur = *(volatile DWORD*)IAT_COPYEX;
+        if (cur != IAT_COPYEX_EXPECT) LG("copyex probe skipped: IAT slot holds %08lx, expected %08lx", cur, IAT_COPYEX_EXPECT);
+        else {
+            g_copyex_orig = (CopyExFn)cur;
+            *(volatile DWORD*)IAT_COPYEX = (DWORD)&W_copyex;
+            LG("probe installed on string-copy-ex import (log only)");
+        }
+    }
+    t = CreateThread(NULL, 0, Disarm, NULL, 0, NULL);
+    if (t) CloseHandle(t); else LG("WARNING: no disarm thread; armed flag stays, next boot will be inert");
+    return 0;
 }
 
 BOOL WINAPI DllMain(HANDLE h, DWORD r, LPVOID l) { (void)h; (void)r; (void)l; return TRUE; }

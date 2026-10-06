@@ -64,4 +64,23 @@ static int rtl_flip(const wchar_t* in, wchar_t* out, int cap) {
     return 1;
 }
 
+/* memo of recent flip OUTPUTS: the UI sometimes re-sets a label from text we already flipped; flipping that again would
+ * restore the logical order, which a left-to-right renderer shows reversed. Stored as (hash,len) so no text is kept. */
+#define MEMO_N 256
+static unsigned memo_h[MEMO_N]; static int memo_l[MEMO_N]; static unsigned memo_pos;
+static unsigned memo_hash(const wchar_t* s, int* len) {
+    unsigned h = 2166136261u; int n = 0;
+    while (s[n]) { h = (h ^ (unsigned short)s[n]) * 16777619u; n++; }
+    *len = n; return h;
+}
+static int memo_has(const wchar_t* s) {
+    int len, i; unsigned h = memo_hash(s, &len);
+    for (i = 0; i < MEMO_N; i++) if (memo_l[i] == len && memo_h[i] == h) return 1;
+    return 0;
+}
+static void memo_add(const wchar_t* s) {
+    int len; unsigned h = memo_hash(s, &len); unsigned k = memo_pos++ % MEMO_N;
+    memo_h[k] = h; memo_l[k] = len;
+}
+
 #endif

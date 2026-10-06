@@ -13,7 +13,7 @@ The Zune already has Windows CE *font linking* enabled: when a font lacks a glyp
 The list for every Zegoe weight ships pointing at the Japanese and Korean fonts. The fix is therefore to (1) build a font that contains
 Hebrew glyphs, (2) put it on the device, and (3) **append it to the link list of every Zegoe weight** with one `lyra.registry_write` per weight.
 A tiny boot helper also registers the fonts so the Hebrew-extended copies of four weights replace the ROM ones directly.
-Hebrew then shows everywhere, in **reversed order** (the Zune has no right-to-left layout; see `hebrew-rtl` and `OTHER-LANGUAGES.md`).
+Hebrew then shows everywhere, in **reversed order** unless the partly working `hebrew-rtl` mod fixes that screen (the Zune has no right-to-left layout; see `OTHER-LANGUAGES.md`).
 
 ## 1. How the Zune's text stack behaves (facts established on the device)
 
@@ -178,6 +178,6 @@ and you could ship a single small open-licence Hebrew font (Noto Sans Hebrew, SI
 ## 11. Pitfalls
 
 - The Zune's IP changes with the Wi-Fi network; its file service stalls when it sleeps (see `LESSONS.md`).
-- Do not enable the `hebrew-rtl` mod: it crashed the UI.
+- `hebrew-rtl` is only partly working: some lists stay reversed. Read its README (stages, boot guard) before enabling it.
 - Do not redistribute the generated fonts (Microsoft). `THIRD-PARTY.md` has the notice.
 - After uninstalling Lyra, the registry link entries may remain until a clean restart (**untested**).

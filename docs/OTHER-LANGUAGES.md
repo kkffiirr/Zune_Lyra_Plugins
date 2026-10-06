@@ -5,7 +5,7 @@ Showing a script on the Zune has **two separate problems**. Only the first one i
 1. **Glyphs**: the UI font has no letters for the script, so you get rectangles. Fix: add the glyphs and make the Zune fall back to them.
 2. **Layout**: the Zune draws every string left to right, one character after another, with no shaping. Right-to-left scripts come out
    reversed, and scripts whose letters change shape or reorder come out wrong. Fix: change the text before it is drawn (the
-   `hebrew-rtl` hook, still experimental).
+   `hebrew-rtl` mod, partly working).
 
 ## Problem 1: glyphs (works for any script that has a source font)
 
@@ -38,7 +38,7 @@ Cyrillic and Greek need nothing else. They may already work from the ROM fonts: 
 
 | Script | Glyphs | Layout work | Verdict |
 |---|---|---|---|
-| **Hebrew** | done | right-to-left order only | letters work; order needs the `hebrew-rtl` hook rewrite |
+| **Hebrew** | done | right-to-left order only | letters work; order is fixed in Now Playing labels and some rows (`hebrew-rtl`), other lists still reversed |
 | **Arabic, Persian, Urdu** | easy (Segoe UI; font generation tested, not tried on a device) | right-to-left **and shaping**: each letter has isolated/initial/medial/final forms plus ligatures such as lam-alef | feasible but real work: extend the hook to map letters to the Arabic Presentation Forms (U+FB50-FDFF, U+FE70-FEFF) using the Unicode joining rules, then reverse. Without shaping the text is readable but every letter is disconnected. |
 | **Cyrillic, Greek, Latin extensions** (Russian, Ukrainian, Vietnamese, ...) | easy | none | works as soon as the glyphs are there |
 | **Thai** | needs Leelawadee UI/Tahoma | combining vowels and tone marks must be positioned above/below letters | partially feasible: base letters yes, marks will sit wrongly |
@@ -52,7 +52,7 @@ Cyrillic and Greek need nothing else. They may already work from the ROM fonts: 
 - before reversing, run a **shaping pass**: for each Arabic letter choose the isolated/initial/medial/final presentation form from its neighbours
   (joining types from Unicode `ArabicShaping.txt`, about 100 lines of table), and combine lam + alef into the ligature code points;
 - keep the existing rule that Latin/digit runs are put back in reading order;
-- add test cases first (host-side unit test, no device needed), and fix the crash cause (permanent copies of the output strings) before testing on a Zune.
+- add test cases first (host-side unit test, no device needed), and follow the staged workflow in the mod's README (log-only probe first, boot guard) before testing on a Zune.
 
 ## Things to remember for every language
 - **Licensing:** the generated fonts are derived from Microsoft fonts. They are for your own device; do not publish them.

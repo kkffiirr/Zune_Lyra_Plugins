@@ -42,8 +42,14 @@
   catches the window after each boot.
 - **Over USB** (no Wi-Fi): launching the Lyra installer app while Lyra is installed runs its **uninstall** (wipes `\flash2\automation`, keeps the installer);
   launch it again to reinstall. `tools/usb-uninstall-loop.ps1` retries `zcli deploy --launch` until the Zune stays connected.
-- `hebrew-rtl` crashed the UI when scrolling lists. Probable cause: the hook passes a **stack buffer** to a function that keeps the pointer.
-  Rewrite with permanent per-string copies, log-only first, and test alone.
+- **`lyra_hook_install` relocates the target's first two instructions blindly.** If either is PC-relative (`ldr rX,[pc,..]`, `b`, `bl`, `add rX,pc`) the trampoline jumps to
+  garbage and the UI dies on the first call. Some gemstone "functions" are 3-instruction import thunks (`ldr ip,[pc,#4]; ldr ip,[ip]; bx ip`). **Disassemble before hooking**
+  (`tools/hookcheck.py` does the static check and emulates the trampoline). For a thunk, swap the import-table pointer (`gemstone` slot, plain data write) instead of
+  patching code, and forward every argument. Dump live code read-only with `lyra-dump-process-range.py <ip> --process-name gemstone.exe --start 0x10000 --end 0xa0000`
+  (the ROM file itself is access-denied, err 5).
+- **Hook a display-final point, log-only first, one change per restart.** A generic string copy has dozens of callers, so filter by caller (return address) and remember
+  what you already transformed, or a string copied twice is transformed twice.
+- **A boot guard beats Lyra's boot ladder for late crashes:** create a flag file before patching and delete it after N minutes of uptime; if it is still there at the next load, skip the hooks.
 
 ## Tooling quirks
 - Shell heredocs/`sed` halve doubled backslashes: write C paths with an editor tool, or use macros like `#define DIR L"\\flash2\\..."`.

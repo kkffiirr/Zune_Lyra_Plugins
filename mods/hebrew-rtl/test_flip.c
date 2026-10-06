@@ -20,6 +20,11 @@ int main(void) {
     T("two lines separately", (unsigned short*)L"\x05E9\x05DC\nab\x05D0",              (unsigned short*)L"\x05DC\x05E9\n\x05D0" L"ab");
     if (rtl_flip((unsigned short*)L"Hello World", o, FLIP_MAX)) { printf("FAIL latin untouched\n"); fails++; } else printf("ok   latin untouched\n");
     if (rtl_flip((unsigned short*)L"", o, FLIP_MAX))           { printf("FAIL empty\n"); fails++; }           else printf("ok   empty\n");
+    { unsigned short x[FLIP_MAX], y[FLIP_MAX]; const unsigned short* in = (unsigned short*)L"\x05E9\x05DC\x05D5\x05DD";
+      rtl_flip(in, x, FLIP_MAX); memo_add((wchar_t*)x);
+      if (!memo_has((wchar_t*)x)) { printf("FAIL memo miss\n"); fails++; } else printf("ok   memo hit on own output\n");
+      if (memo_has((wchar_t*)in)) { printf("FAIL memo hit on logical text\n"); fails++; } else printf("ok   memo miss on logical text\n");
+      rtl_flip(in, y, FLIP_MAX); if (!eq(x, y)) { printf("FAIL deterministic\n"); fails++; } else printf("ok   same input flips the same\n"); }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     return fails != 0;
 }

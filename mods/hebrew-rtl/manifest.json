@@ -1,13 +1,20 @@
 {
   "mod_id": "hebrew-rtl",
   "name": "Hebrew Text Direction",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "author": "Gilad",
   "category": "Appearance",
-  "description": "Shows Hebrew text in the correct right-to-left reading order. Works with the Hebrew Font mod. Text without Hebrew is not touched. Firmware 4.5 only.",
-  "changelog": "First experimental build: hooks the label and list-row text setters.",
-  "requires": ["lyra.mod_runtime"],
+  "description": "PARTIAL: shows Hebrew in reading order in Now Playing labels and some list text; albums/artists lists still reversed. Works with the Hebrew Font mod. Firmware 4.5 only.",
+  "changelog": "0.7: staged (A/B/C/P/R) with a self-disarming boot guard; flips labels plus two verified list-text call sites.",
+  "requires": [
+    "lyra.mod_runtime"
+  ],
   "actions": [
-    { "type": "lyra.load_module", "target_proc": "gemstone", "module_ref": "@/rtlflip.dll", "init": "RtlFlipInstall" }
+    {
+      "type": "lyra.load_module",
+      "target_proc": "gemstone",
+      "module_ref": "@/rtlflip.dll",
+      "init": "RtlFlipInstall"
+    }
   ]
 }
