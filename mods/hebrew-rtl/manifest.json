@@ -1,11 +1,11 @@
 {
   "mod_id": "hebrew-rtl",
   "name": "Hebrew Text Direction",
-  "version": "0.7.0",
+  "version": "0.9.0",
   "author": "Gilad",
   "category": "Appearance",
-  "description": "PARTIAL: shows Hebrew in reading order in Now Playing labels and some list text; albums/artists lists still reversed. Works with the Hebrew Font mod. Firmware 4.5 only.",
-  "changelog": "0.7: staged (A/B/C/P/R) with a self-disarming boot guard; flips labels plus two verified list-text call sites.",
+  "description": "Shows Hebrew in reading order in Now Playing, the queue, and the songs, albums and artists lists. Works with the Hebrew Font mod. Firmware 4.5 only. Staged, with a self-disarming boot guard.",
+  "changelog": "0.9: flip at the metadata-property getter (title/artist/album) covers the lists; guard window 3 min.",
   "requires": [
     "lyra.mod_runtime"
   ],

@@ -8,6 +8,9 @@
  *   A = guard + log only, NO hooks installed
  *   B = hook installed, text passed through unchanged, Hebrew strings logged
  *   C = hook installed, Hebrew text flipped
+ *   G = Q plus: the getter's output for property ids 0x20001/2/3 (title/artist/album, seen in Q logs) is flipped in place when it has Hebrew
+ *   Q = R plus a LOG-ONLY hook on gemstone 0x748d0, the metadata-property getter GetStr(obj, propId, buf, cch, extra): after each call
+ *       it logs caller, property id and any Hebrew result. Used to learn which property ids are display text.
  *   R = P plus: Hebrew text passing through the copy at an ALLOWED call site (ROW_LR[]) is flipped (once; memo-guarded)
  *   P = C plus a LOG-ONLY probe on the string-copy import (gemstone IAT slot 0x962a8): records which callers (LR) pass Hebrew
  *       text through it. It never changes the text. Used to find which of the 88 call sites are list rows.
@@ -23,8 +26,11 @@
 #define VA_SET_LABEL   0x00038434u
 #define WORD0_EXPECT   0xe92d4010u   /* push {r4, lr}          */
 #define WORD1_EXPECT   0xe24dd048u   /* sub sp, sp, #0x48      */
-#define ARM_SECONDS    300
+#define ARM_SECONDS    180
 #define LOG_LIMIT      400
+#define VA_PROP        0x000748d0u   /* metadata string getter, 5 args, 112 callers; first two instructions checked offline (hookcheck.py) */
+#define PROP_W0        0xe92d4030u   /* push {r4, r5, lr} */
+#define PROP_W1        0xe24dd00cu   /* sub sp, sp, #0xc  */
 #define IAT_COPY       0x000962a8u   /* gemstone import slot -> coredll StringCchCopyW(dest, cch, src), 3 args, checked offline */
 #define IAT_COPY_EXPECT 0x4035d744u
 #define IAT_COPYEX     0x00096228u   /* -> coredll StringCchCopyExW(dest, cch, src, pEnd, pRemain, flags): 6 args, checked offline */
@@ -68,7 +74,7 @@ static char read_stage(void) {
     if (h == INVALID_HANDLE_VALUE) return 'A';
     if (ReadFile(h, &c, 1, &got, NULL) && got == 1 && c >= 'a' && c <= 'z') c -= 32;
     CloseHandle(h);
-    return (got == 1 && (c == 'B' || c == 'C' || c == 'P' || c == 'R')) ? c : 'A';
+    return (got == 1 && (c == 'B' || c == 'C' || c == 'P' || c == 'R' || c == 'Q' || c == 'G')) ? c : 'A';
 }
 
 static volatile LONG g_n_label, g_n_flip, g_n_skip;
@@ -173,6 +179,44 @@ static DWORD W_copyex(DWORD dest, DWORD cch, DWORD src, DWORD pend, DWORD prem, 
     return g_copyex_orig(dest, cch, src, pend, prem, flags);
 }
 
+/* ---- stage Q: log-only hook on the metadata-property getter ---- */
+typedef HRESULT (*PropFn)(DWORD obj, DWORD prop, wchar_t* buf, DWORD cch, DWORD extra);
+static PropFn g_prop_next;
+static volatile int g_prop_flip;                     /* stage G */
+static volatile LONG g_n_prop;
+static wchar_t g_propbuf[FLIP_MAX];                  /* only touched on the calling thread's stack frame order; see lock below */
+static CRITICAL_SECTION g_prop_cs; static volatile int g_prop_cs_ok;
+static volatile LONG g_prop_logged;
+static HRESULT H_prop(DWORD obj, DWORD prop, wchar_t* buf, DWORD cch, DWORD extra) {
+    DWORD lr = (DWORD)__builtin_return_address(0);
+    HRESULT r = g_prop_next(obj, prop, buf, cch, extra);
+    if (g_prop_flip && (int)r >= 0 && buf && cch && cch < FLIP_MAX && !((DWORD)buf & 1) && prop >= 0x20001u && prop <= 0x20003u && !memo_has(buf)) {
+        /* flip in place: output has the same length and fits the caller's buffer */
+        if (g_prop_cs_ok) {
+            EnterCriticalSection(&g_prop_cs);
+            if (rtl_flip(buf, g_propbuf, FLIP_MAX)) {
+                int l = 0; while (g_propbuf[l]) l++;
+                if ((DWORD)l < cch) { memcpy(buf, g_propbuf, (l + 1) * sizeof(wchar_t)); memo_add(buf); InterlockedIncrement(&g_n_prop); }
+            }
+            LeaveCriticalSection(&g_prop_cs);
+            if ((g_n_prop & 127) == 1 && g_n_prop) LG("prop-flip #%ld id=%08lx lr=%08lx", g_n_prop, prop, lr);
+        }
+        return r;
+    }
+    if ((int)r >= 0 && buf && cch && cch <= 4096 && !((DWORD)buf & 1)) {
+        DWORD i; int heb = 0;
+        for (i = 0; i < cch && i < 64 && buf[i]; i++) if (IS_HEB(buf[i])) { heb = 1; break; }
+        if (heb) {
+            int n; unsigned k = memo_hash(buf, &n) * 31u + lr + prop * 131u;
+            if (first_time(k ^ 0x70726f70u) && g_prop_logged < 300) {
+                char a[160]; InterlockedIncrement(&g_prop_logged); u8(buf, a, sizeof a);
+                LG("prop lr=%08lx id=%08lx cch=%lu out=\"%s\"", lr, prop, cch, a);
+            }
+        }
+    }
+    return r;
+}
+
 /* Clears the armed flag after ARM_SECONDS of healthy uptime. */
 static DWORD WINAPI Disarm(LPVOID p) {
     (void)p;
@@ -202,7 +246,7 @@ __declspec(dllexport) int RtlFlipInstall(void) {
         LG("ABORT: target bytes %08lx %08lx != expected (different firmware?). no hooks.", w0, w1);
         return -1;
     }
-    g_flip = (stage == 'C' || stage == 'P' || stage == 'R');
+    g_flip = (stage == 'C' || stage == 'P' || stage == 'R' || stage == 'Q' || stage == 'G');
     touch(F_ARMED);
     if (!exists(F_ARMED)) { LG("ABORT: cannot create armed flag, refusing to hook without the guard"); return -1; }
     {
@@ -210,8 +254,8 @@ __declspec(dllexport) int RtlFlipInstall(void) {
         LG("hook SetLabelText rc=%d flip=%d", rc, g_flip);
         if (rc != 0 || !g_next) { DeleteFileW(F_ARMED); return -1; }
     }
-    if (stage == 'P' || stage == 'R') {
-        g_row_flip = (stage == 'R');
+    if (stage == 'P' || stage == 'R' || stage == 'Q' || stage == 'G') {
+        g_row_flip = (stage == 'R' || stage == 'Q' || stage == 'G');
         DWORD cur = *(volatile DWORD*)IAT_COPY;
         if (cur != IAT_COPY_EXPECT) LG("probe skipped: IAT slot holds %08lx, expected %08lx", cur, IAT_COPY_EXPECT);
         else {
@@ -225,6 +269,14 @@ __declspec(dllexport) int RtlFlipInstall(void) {
             g_copyex_orig = (CopyExFn)cur;
             *(volatile DWORD*)IAT_COPYEX = (DWORD)&W_copyex;
             LG("probe installed on string-copy-ex import (log only)");
+        }
+    }
+    if (stage == 'Q' || stage == 'G') {
+        InitializeCriticalSection(&g_prop_cs); g_prop_cs_ok = 1; g_prop_flip = (stage == 'G');
+        if (*(volatile DWORD*)VA_PROP != PROP_W0 || *(volatile DWORD*)(VA_PROP + 4) != PROP_W1) LG("prop probe skipped: target bytes differ");
+        else {
+            int rc = lyra_hook_install(VA_PROP, (void*)&H_prop, (void**)&g_prop_next);
+            LG("prop hook rc=%d flip=%d", rc, g_prop_flip);
         }
     }
     t = CreateThread(NULL, 0, Disarm, NULL, 0, NULL);

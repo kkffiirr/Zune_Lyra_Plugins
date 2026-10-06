@@ -5,7 +5,7 @@ Showing a script on the Zune has **two separate problems**. Only the first one i
 1. **Glyphs**: the UI font has no letters for the script, so you get rectangles. Fix: add the glyphs and make the Zune fall back to them.
 2. **Layout**: the Zune draws every string left to right, one character after another, with no shaping. Right-to-left scripts come out
    reversed, and scripts whose letters change shape or reorder come out wrong. Fix: change the text before it is drawn (the
-   `hebrew-rtl` mod, partly working).
+   `hebrew-rtl` mod).
 
 ## Problem 1: glyphs (works for any script that has a source font)
 
@@ -38,7 +38,7 @@ Cyrillic and Greek need nothing else. They may already work from the ROM fonts: 
 
 | Script | Glyphs | Layout work | Verdict |
 |---|---|---|---|
-| **Hebrew** | done | right-to-left order only | letters work; order is fixed in Now Playing labels and some rows (`hebrew-rtl`), other lists still reversed |
+| **Hebrew** | done | right-to-left order only | letters work; order fixed by `hebrew-rtl` (Now Playing, queue, songs/albums/artists lists) |
 | **Arabic, Persian, Urdu** | easy (Segoe UI; font generation tested, not tried on a device) | right-to-left **and shaping**: each letter has isolated/initial/medial/final forms plus ligatures such as lam-alef | feasible but real work: extend the hook to map letters to the Arabic Presentation Forms (U+FB50-FDFF, U+FE70-FEFF) using the Unicode joining rules, then reverse. Without shaping the text is readable but every letter is disconnected. |
 | **Cyrillic, Greek, Latin extensions** (Russian, Ukrainian, Vietnamese, ...) | easy | none | works as soon as the glyphs are there |
 | **Thai** | needs Leelawadee UI/Tahoma | combining vowels and tone marks must be positioned above/below letters | partially feasible: base letters yes, marks will sit wrongly |
