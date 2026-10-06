@@ -57,6 +57,22 @@ You need the same set-up as the other mods here (CeGCC, Lyra's SDK) plus ScummVM
 
 ## Install
 
+**Scripted (Windows, Python 3, standard library only):** `tools/deploy_scummvm.py` does both parts below.
+
+```
+python tools/deploy_scummvm.py find                                   # the Zune's IP on your Wi-Fi
+python tools/deploy_scummvm.py kit --exe exploiter.exe --thumb GameThumbnail.png --out deploykit
+python tools/deploy_scummvm.py all --ip <zune-ip> --bin <folder with the 3 built files> --kit deploykit ^
+       --game tentacle=<folder> --game samnmax=<folder>
+```
+
+`all` uploads over Wi-Fi (resumable), asks you to plug in USB, then installs the tile (`wifi` and `usb` run the two
+halves separately). The USB half needs WSL with `usbipd-win` and zune-deploy's `zcli`. Tested: `find`, `kit` and `usb`
+(the tile installs and `application.cfg` matches the one that worked by hand). The Wi-Fi half reuses the uploader below
+and the Lyra "create folder" call, but was not re-run after being wrapped into this script.
+
+By hand:
+
 1. Wi-Fi (Lyra's daemon): create `\flash2\scummvm\`, `games\`, `saves\` and upload `scummvmapp.exe`, `scummvmrun.exe`,
    `scummvm-zune.dll` (`tools/upload_resume.py <zune-ip> <local> <remote>` is a resumable uploader; it reconnects
    when the Zune sleeps its Wi-Fi). Upload your game data to `games\tentacle\` (`TENTACLE.000/.001`, `MONSTER.SOU`) and/or
