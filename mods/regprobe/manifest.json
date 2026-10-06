@@ -1,0 +1,12 @@
+{
+  "mod_id": "regprobe",
+  "name": "Registry Probe",
+  "version": "0.1.0",
+  "author": "Gilad",
+  "category": "Developer",
+  "description": "Diagnostic only: logs the font-linking registry settings. Changes nothing.",
+  "requires": ["lyra.mod_runtime"],
+  "actions": [
+    { "type": "lyra.load_module", "target_proc": "gemstone", "module_ref": "@/regprobe.dll", "init": "RegProbeInstall" }
+  ]
+}

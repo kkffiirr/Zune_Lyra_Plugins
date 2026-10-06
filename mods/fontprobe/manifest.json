@@ -1,0 +1,13 @@
+{
+  "mod_id": "fontprobe",
+  "name": "Font Probe",
+  "version": "0.1.0",
+  "author": "Gilad",
+  "category": "Developer",
+  "description": "Diagnostic only: logs the fonts the UI knows and whether a test font can be added at runtime. Changes nothing visible. Log: fontprobe.log in the automation folder",
+  "changelog": "Ships test font @/ZegoeHebTest.ttf",
+  "requires": ["lyra.mod_runtime"],
+  "actions": [
+    { "type": "lyra.load_module", "target_proc": "gemstone", "module_ref": "@/fontprobe.dll", "init": "FontProbeInstall" }
+  ]
+}

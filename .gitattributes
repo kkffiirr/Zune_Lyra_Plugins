@@ -1,0 +1,4 @@
+# keep LF everywhere: the shell scripts and C sources are built/run under WSL/Linux
+* text=auto eol=lf
+*.ps1 text eol=lf
+*.sh text eol=lf

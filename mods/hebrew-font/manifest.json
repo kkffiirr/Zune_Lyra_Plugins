@@ -1,0 +1,22 @@
+{
+  "mod_id": "hebrew-font",
+  "name": "Hebrew Font",
+  "version": "0.6.0",
+  "author": "Gilad",
+  "category": "Appearance",
+  "description": "Adds Hebrew letters to the Zune UI fonts (Zegoe UI, six weights). Hebrew is not right-to-left aware. Personal use: the fonts are derived from Microsoft fonts.",
+  "changelog": "Adds the Hebrew font to the Zegoe UI font-link lists so every weight can fall back to it for Hebrew glyphs. Fonts: @/ZegoeUI.ttf @/ZegoeUI_L.ttf @/ZegoeUI_SL.ttf @/ZegoeUI_SB.ttf @/ZegoeUI_B.ttf @/ZegoeUI_Blk.ttf @/ZegoeHeb_R.ttf @/ZegoeHeb_SL.ttf",
+  "requires": ["lyra.mod_runtime"],
+  "daemons": [
+    { "binary": "@/fontd.exe" }
+  ],
+  "actions": [
+    { "type": "lyra.registry_write", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\FontLink\\SystemLink", "name": "Zegoe UI", "value_type": "SZ", "value": "\\Windows\\MeiryoForZune.ttf,Meiryo for Zune;\\Windows\\MalgunForZune.ttf,Malgun For Zune;\\flash2\\automation\\mods\\hebrew-font\\ZegoeHeb_R.ttf,Zegoe UH" },
+    { "type": "lyra.registry_write", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\FontLink\\SystemLink", "name": "Zegoe UI SemiLight", "value_type": "SZ", "value": "\\Windows\\MeiryoForZune.ttf,Meiryo for Zune;\\Windows\\MalgunForZune.ttf,Malgun For Zune;\\flash2\\automation\\mods\\hebrew-font\\ZegoeHeb_R.ttf,Zegoe UH" },
+    { "type": "lyra.registry_write", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\FontLink\\SystemLink", "name": "Zegoe UI Light", "value_type": "SZ", "value": "\\Windows\\MeiryoForZune.ttf,Meiryo for Zune;\\Windows\\MalgunForZune.ttf,Malgun For Zune;\\flash2\\automation\\mods\\hebrew-font\\ZegoeHeb_R.ttf,Zegoe UH" },
+    { "type": "lyra.registry_write", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\FontLink\\SystemLink", "name": "Zegoe UI Semibold", "value_type": "SZ", "value": "\\Windows\\MeiryoForZune.ttf,Meiryo for Zune;\\Windows\\MalgunForZune.ttf,Malgun For Zune;\\flash2\\automation\\mods\\hebrew-font\\ZegoeHeb_R.ttf,Zegoe UH" },
+    { "type": "lyra.registry_write", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\FontLink\\SystemLink", "name": "Zegoe UI Bold", "value_type": "SZ", "value": "\\Windows\\MeiryoForZune.ttf,Meiryo for Zune;\\Windows\\MalgunForZune.ttf,Malgun For Zune;\\flash2\\automation\\mods\\hebrew-font\\ZegoeHeb_R.ttf,Zegoe UH" },
+    { "type": "lyra.registry_write", "hive": "HKLM", "key": "SOFTWARE\\Microsoft\\FontLink\\SystemLink", "name": "Zegoe UI Black", "value_type": "SZ", "value": "\\Windows\\MeiryoForZune.ttf,Meiryo for Zune;\\Windows\\MalgunForZune.ttf,Malgun For Zune;\\flash2\\automation\\mods\\hebrew-font\\ZegoeHeb_R.ttf,Zegoe UH" },
+    { "type": "lyra.load_module", "target_proc": "gemstone", "module_ref": "@/fontload.dll", "init": "FontLoadInstall" }
+  ]
+}
