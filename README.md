@@ -50,5 +50,5 @@ tools/              deploy/verify/log helpers (Python), font builder, USB recove
 docs/               INSTALL.md, LESSONS.md
 ```
 
-Licence: [MIT](LICENSE) for the code and notes in this repository (`tools/xuiz.py` credits Project Lyra, also MIT).
+Licence: [MIT](LICENSE) for the code and notes in this repository (`tools/xuiz.py` credits Project Lyra, also MIT; see [THIRD-PARTY.md](THIRD-PARTY.md)).
 The Microsoft fonts the Hebrew mod needs are **not** covered and not included; see "The fonts are not in this repository".
