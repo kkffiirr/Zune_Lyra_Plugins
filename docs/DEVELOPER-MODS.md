@@ -9,7 +9,6 @@ must be enabled in the Mods tab. Nothing here was enabled by us except `hebrew-f
 |---|---|---|---|
 | **night-mode** | nothing (manifest + 2 PNGs) | n/a | deployed |
 | **marketplace-redirect** | nothing (registry values: points the Marketplace endpoints at the community `zunes.me` servers) | n/a | deployed |
-| **playnext** | 2 C/C++ files + Lyra SDK, no exception handling | builds cleanly (`./build.sh playnext`, 79 KB DLL, exports `PlayNextInstall`) | deployed, not yet tried |
 | **custom-background** | 1 C++ file + 2 UI scenes (`.xui` -> `.xur`) | scenes compile (see below); the DLL does **not**: it uses MSVC `__try/__except` in 10 places | not deployed |
 | **screencast** | `ce_image` (Windows CE *Imaging* COM: `imaging.h`, `imgguids.h`) and low-level kernel/physical-memory code | blocked: CeGCC has no `imaging.h` | not deployed |
 | **zune-cast** | wolfSSL, `ce_image`, a private `zdk.h` | blocked (imaging + wolfSSL submodule) | not deployed |
@@ -53,5 +52,3 @@ Enable one mod at a time, restart cleanly, and keep the recovery routes in `LESS
 ## Notes on specific mods
 - **marketplace-redirect** changes the Zune's Marketplace/sign-in/stats endpoints to third-party community servers. Only enable it if you want that.
 - **night-mode** is a pure visual tint with a moon quick-toggle (bottom right of the playback HUD).
-- **playnext** adds a "Play Next" item to the long-press menu on songs, albums and artists, using two hooks inside the UI process. The developer's source builds with
-  CeGCC without changes; the compiler differs from theirs, so test it with nothing else changed.

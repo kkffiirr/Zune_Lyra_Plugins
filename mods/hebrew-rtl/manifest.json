@@ -2,7 +2,7 @@
   "mod_id": "hebrew-rtl",
   "name": "Hebrew Text Direction",
   "version": "0.9.0",
-  "author": "Gilad",
+  "author": "Kkffiirr",
   "category": "Appearance",
   "description": "Shows Hebrew in reading order in Now Playing, the queue, and the songs, albums and artists lists. Works with the Hebrew Font mod. Firmware 4.5 only. Staged, with a self-disarming boot guard.",
   "changelog": "0.9: flip at the metadata-property getter (title/artist/album) covers the lists; guard window 3 min.",

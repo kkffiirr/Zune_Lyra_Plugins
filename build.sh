@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the native parts of a mod with the CeGCC (arm-mingw32ce) cross compiler. Run inside WSL/Linux.
-#   ./build.sh hebrew-font | hebrew-rtl | regprobe | fontprobe | playnext
+#   ./build.sh hebrew-font | hebrew-rtl | regprobe | fontprobe
 # Env: CEGCC=<prefix of a CeGCC build with bin/arm-mingw32ce-gcc>   (default below)
 #      LYRA_SRC=<clone of github.com/project-lyra-zune/project-lyra> (default ./lyra-src)
 set -e
@@ -35,12 +35,6 @@ case "$mod" in
     dll -shared -o regprobe.dll "$ROOT/mods/regprobe/regprobe.c" -lcoredll; cp regprobe.dll "$OUT/" ;;
   fontprobe)
     dll -shared -o fontprobe.dll "$ROOT/mods/fontprobe/fontprobe.c" -lcoredll; cp fontprobe.dll "$OUT/" ;;
-  playnext)   # Lyra's own Play Next mod, rebuilt with CeGCC instead of the MSVC/OpenZDK toolchain
-    cp -r "$LYRA_SRC/mods/playnext/src" src; sdk
-    dll $INC -I src -c src/playnext_gem.cpp -o pn_gem.o 2>/dev/null || arm-mingw32ce-g++ $F $INC -I src -c src/playnext_gem.cpp -o pn_gem.o
-    dll $INC -I src -c src/playnext_queue.c -o pn_q.o
-    arm-mingw32ce-g++ -shared -o playnext.dll pn_gem.o pn_q.o lc.o cl.o -lcoredll -ltoolhelp
-    cp "$LYRA_SRC/mods/playnext/manifest.json" "$OUT/"; cp playnext.dll "$OUT/" ;;
   *) echo "unknown mod: $mod"; exit 2 ;;
 esac
 ls -la "$OUT"

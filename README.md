@@ -9,7 +9,6 @@ platform for the **Zune HD (firmware 4.5)**. Tested on Lyra 1.4.0. Native code i
 | [`hebrew-font`](mods/hebrew-font) | **works** | Hebrew letters in the whole UI (track names, menus, Now Playing). A boot helper registers Hebrew-extended Zegoe UI fonts and the font-link lists get the Hebrew font appended. |
 | [`hebrew-rtl`](mods/hebrew-rtl) | **works** (checked on a device) | Visually reorders Hebrew text (the Zune draws everything left-to-right): Now Playing, the queue, and the songs, albums and artists lists. Staged install with a self-disarming boot guard; see its README. |
 | [`regprobe`](mods/regprobe), [`fontprobe`](mods/fontprobe) | diagnostics | Read-only logs of the font registry / font list. |
-| `playnext` | builds | Lyra's own Play Next mod rebuilt with CeGCC (`./build.sh playnext`); untested on a device. |
 | [`scummvm`](mods/scummvm) | **works, with known issues** | ScummVM (SCUMM v0-v6: Day of the Tentacle, Sam & Max) as a tile in the Apps list. Touch controls; quitting restarts the Zune and hardware buttons stop touch. See its README. |
 
 The full, reproducible account of the font work (firmware extraction, font building, what failed and why, the font-link fix, with reference values to check against) is

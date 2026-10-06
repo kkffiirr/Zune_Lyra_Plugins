@@ -2,7 +2,7 @@
   "mod_id": "hebrew-font",
   "name": "Hebrew Font",
   "version": "0.6.0",
-  "author": "Gilad",
+  "author": "Kkffiirr",
   "category": "Appearance",
   "description": "Adds Hebrew letters to the Zune UI fonts (Zegoe UI, six weights). Hebrew is not right-to-left aware. Personal use: the fonts are derived from Microsoft fonts.",
   "changelog": "Adds the Hebrew font to the Zegoe UI font-link lists so every weight can fall back to it for Hebrew glyphs. Fonts: @/ZegoeUI.ttf @/ZegoeUI_L.ttf @/ZegoeUI_SL.ttf @/ZegoeUI_SB.ttf @/ZegoeUI_B.ttf @/ZegoeUI_Blk.ttf @/ZegoeHeb_R.ttf @/ZegoeHeb_SL.ttf",
