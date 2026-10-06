@@ -79,16 +79,8 @@ Load, Quit). Top-right button = skip cutscene (Esc).
   input stop (the system treats the buttons as "leave this app" and tears the input down). So the buttons cannot be
   used as controls; use the on-screen buttons. **Do not press power while ScummVM runs**: it suspends the device and you
   have to force a restart (hold power).
-* **SCUMM v0-v6 only.** v7/v8 (for example Curse of Monkey Island) is not built and not tried; it would be much
-  heavier (640x480, video). Speech must be uncompressed (`monster.sou`); FLAC/MP3/Vorbis-compressed audio is not
-  supported (`monster.sof` is not).
 * **Performance is unmeasured.** Frame rate is unknown; scaling and rotation are plain C. Audio is 22 kHz.
 * **Needs Lyra.** The backend uses Lyra's kernel access for the screen and the input ring.
-* **Lyra reinstall wipes `\flash2\automation`.** That is why the game and its files are in `\flash2\scummvm`.
-* **Wi-Fi drops when the Zune screen sleeps,** and Wi-Fi and USB are exclusive, which makes uploads slow to babysit.
-* **Tile icon.** The icon (official ScummVM icon plus the Zune logo) is **not in this repository** (the Zune logo is
-  Microsoft's). `tools/make_icon.py` builds it from your own `scummvm.ico` and `zune.svg`. Whether the Zune refreshes
-  the tile image without a restart is not verified.
 * A first, simpler launch method exists (start from the PC with `lyra-plugin-daemon.py spawn ... RunDaemon`, shell
   frozen, Home button works as skip and double-press as menu, no restart on quit). It is not packaged here.
 
