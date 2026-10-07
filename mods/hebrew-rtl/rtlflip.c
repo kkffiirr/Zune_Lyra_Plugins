@@ -27,6 +27,7 @@
 #define WORD0_EXPECT   0xe92d4010u   /* push {r4, lr}          */
 #define WORD1_EXPECT   0xe24dd048u   /* sub sp, sp, #0x48      */
 #define ARM_SECONDS    180
+#define MAX_UNSTABLE   5             /* consecutive unstable boots tolerated before the mod goes inert */
 #define LOG_LIMIT      400
 #define VA_PROP        0x000748d0u   /* metadata string getter, 5 args, 112 callers; first two instructions checked offline (hookcheck.py) */
 #define PROP_W0        0xe92d4030u   /* push {r4, r5, lr} */
@@ -62,6 +63,21 @@ static void LG(const char* fmt, ...) {
 }
 
 static int exists(const wchar_t* p) { return GetFileAttributesW(p) != 0xFFFFFFFFu; }
+
+static int read_count(const wchar_t* p) {               /* the armed file holds one byte: unstable boots seen so far */
+    unsigned char c = 0; DWORD got = 0;
+    HANDLE h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (!ReadFile(h, &c, 1, &got, NULL) || got != 1) c = 0;
+    CloseHandle(h);
+    return c;
+}
+
+static void write_count(const wchar_t* p, int n) {
+    unsigned char c = (unsigned char)n; DWORD w;
+    HANDLE h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) { WriteFile(h, &c, 1, &w, NULL); CloseHandle(h); }
+}
 
 static void touch(const wchar_t* p) {
     HANDLE h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -227,14 +243,18 @@ static DWORD WINAPI Disarm(LPVOID p) {
 }
 
 __declspec(dllexport) int RtlFlipInstall(void) {
-    char stage; DWORD w0, w1; HANDLE t;
+    char stage; DWORD w0, w1; HANDLE t; int prev_unstable = 0;
     LG("==== RtlFlipInstall v0.2 loaded (pid=%lu) runtime=%d", GetCurrentProcessId(), lyra_runtime_available());
 
     if (exists(F_TRIPPED)) { LG("INERT: rtlflip.tripped exists (delete it to re-enable). no hooks."); return 0; }
-    if (exists(F_ARMED)) {
-        LG("TRIPPED: armed flag still present = previous run died inside the %d s window. no hooks.", ARM_SECONDS);
-        MoveFileW(F_ARMED, F_TRIPPED);
-        return 0;
+    if (exists(F_ARMED)) {                          /* previous boot did not stay up ARM_SECONDS */
+        prev_unstable = read_count(F_ARMED) + 1;
+        if (prev_unstable >= MAX_UNSTABLE) {
+            LG("TRIPPED: %d consecutive unstable boots (each ended inside the %d s window). no hooks.", prev_unstable, ARM_SECONDS);
+            MoveFileW(F_ARMED, F_TRIPPED);
+            return 0;
+        }
+        LG("previous boot ended inside the %d s window (unstable boot %d of %d tolerated); hooking again", ARM_SECONDS, prev_unstable, MAX_UNSTABLE);
     }
     stage = read_stage();
     LG("stage=%c", stage);
@@ -247,7 +267,7 @@ __declspec(dllexport) int RtlFlipInstall(void) {
         return -1;
     }
     g_flip = (stage == 'C' || stage == 'P' || stage == 'R' || stage == 'Q' || stage == 'G');
-    touch(F_ARMED);
+    write_count(F_ARMED, prev_unstable);
     if (!exists(F_ARMED)) { LG("ABORT: cannot create armed flag, refusing to hook without the guard"); return -1; }
     {
         int rc = lyra_hook_install(VA_SET_LABEL, (void*)&H_label, (void**)&g_next);
