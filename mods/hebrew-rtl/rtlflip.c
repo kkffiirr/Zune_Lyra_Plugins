@@ -40,9 +40,15 @@
 
 #define DIR       L"\\flash2\\automation\\"
 #define F_LOG     DIR L"rtlflip.log"
-#define F_STAGE   DIR L"rtlflip.stage"
-#define F_ARMED   DIR L"rtlflip.armed"
-#define F_TRIPPED DIR L"rtlflip.tripped"
+/* guard/stage files are per process: the UI process (gemstone) uses rtlflip.*, the HUD host (servicesd) uses rtlflip.hud.* */
+static const wchar_t* g_fstage   = DIR L"rtlflip.stage";
+static const wchar_t* g_farmed   = DIR L"rtlflip.armed";
+static const wchar_t* g_ftripped = DIR L"rtlflip.tripped";
+static const char*    g_tag      = "";
+#define F_STAGE   g_fstage
+#define F_ARMED   g_farmed
+#define F_TRIPPED g_ftripped
+#define F_HUD_TRIPPED DIR L"rtlflip.hud.tripped"
 
 typedef HRESULT (*LabelFn)(void* elem, const wchar_t* text);
 static LabelFn g_next;
@@ -52,7 +58,8 @@ static wchar_t g_buf[RING][FLIP_MAX];             /* permanent copies: never fre
 
 static void LG(const char* fmt, ...) {
     char buf[300]; int n; DWORD w; HANDLE h; va_list ap;
-    va_start(ap, fmt); n = vsnprintf(buf, sizeof(buf) - 3, fmt, ap); va_end(ap);
+    n = 0; while (g_tag[n] && n < 8) { buf[n] = g_tag[n]; n++; }
+    va_start(ap, fmt); n += vsnprintf(buf + n, sizeof(buf) - 3 - n, fmt, ap); va_end(ap);
     if (n < 0) n = 0;
     buf[n++] = '\r'; buf[n++] = '\n';
     h = CreateFileW(F_LOG, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -242,26 +249,33 @@ static DWORD WINAPI Disarm(LPVOID p) {
     return 0;
 }
 
-__declspec(dllexport) int RtlFlipInstall(void) {
+static volatile int g_init_status;   /* 0 off, 1 active, 2 tripped/inert, 3 reset (restart to apply) */
+
+static int Install_impl(int hud) {
     char stage; DWORD w0, w1; HANDLE t; int prev_unstable = 0;
+    DWORD va_label    = hud ? 0x419c6a14u : VA_SET_LABEL;   /* zhud_serv.dll: same body as gemstone 0x38434 (verified word for word) */
+    DWORD iat_copy    = hud ? 0x419de11cu : IAT_COPY;       /* zhud import slots for StringCchCopyW / StringCchCopyExW */
+    DWORD iat_copyex  = hud ? 0x419de0f4u : IAT_COPYEX;
     LG("==== RtlFlipInstall v0.2 loaded (pid=%lu) runtime=%d", GetCurrentProcessId(), lyra_runtime_available());
 
-    if (exists(F_TRIPPED)) { LG("INERT: rtlflip.tripped exists (delete it to re-enable). no hooks."); return 0; }
+    if (exists(F_TRIPPED)) { LG("INERT: rtlflip.tripped exists (delete it to re-enable). no hooks."); g_init_status = 2; return 0; }
     if (exists(F_ARMED)) {                          /* previous boot did not stay up ARM_SECONDS */
         prev_unstable = read_count(F_ARMED) + 1;
         if (prev_unstable >= MAX_UNSTABLE) {
             LG("TRIPPED: %d consecutive unstable boots (each ended inside the %d s window). no hooks.", prev_unstable, ARM_SECONDS);
             MoveFileW(F_ARMED, F_TRIPPED);
+            g_init_status = 2;
             return 0;
         }
         LG("previous boot ended inside the %d s window (unstable boot %d of %d tolerated); hooking again", ARM_SECONDS, prev_unstable, MAX_UNSTABLE);
     }
     stage = read_stage();
+    if (hud && (stage == 'R' || stage == 'Q' || stage == 'G')) stage = 'P';   /* the HUD has no allow-listed sites or getter hook yet */
     LG("stage=%c", stage);
     if (stage == 'A') return 0;                    /* guard-only: proves loading + file handling, patches nothing */
 
-    w0 = *(volatile DWORD*)VA_SET_LABEL;           /* gemstone's own code, always mapped in this process */
-    w1 = *(volatile DWORD*)(VA_SET_LABEL + 4);
+    w0 = *(volatile DWORD*)va_label;               /* this process's own code, always mapped */
+    w1 = *(volatile DWORD*)(va_label + 4);
     if (w0 != WORD0_EXPECT || w1 != WORD1_EXPECT) {
         LG("ABORT: target bytes %08lx %08lx != expected (different firmware?). no hooks.", w0, w1);
         return -1;
@@ -270,24 +284,24 @@ __declspec(dllexport) int RtlFlipInstall(void) {
     write_count(F_ARMED, prev_unstable);
     if (!exists(F_ARMED)) { LG("ABORT: cannot create armed flag, refusing to hook without the guard"); return -1; }
     {
-        int rc = lyra_hook_install(VA_SET_LABEL, (void*)&H_label, (void**)&g_next);
+        int rc = lyra_hook_install(va_label, (void*)&H_label, (void**)&g_next);
         LG("hook SetLabelText rc=%d flip=%d", rc, g_flip);
         if (rc != 0 || !g_next) { DeleteFileW(F_ARMED); return -1; }
     }
     if (stage == 'P' || stage == 'R' || stage == 'Q' || stage == 'G') {
-        g_row_flip = (stage == 'R' || stage == 'Q' || stage == 'G');
-        DWORD cur = *(volatile DWORD*)IAT_COPY;
+        g_row_flip = !hud && (stage == 'R' || stage == 'Q' || stage == 'G');
+        DWORD cur = *(volatile DWORD*)iat_copy;
         if (cur != IAT_COPY_EXPECT) LG("probe skipped: IAT slot holds %08lx, expected %08lx", cur, IAT_COPY_EXPECT);
         else {
             g_copy_orig = (CopyFn)cur;                     /* set before redirecting: a call landing on the wrapper must already see it */
-            *(volatile DWORD*)IAT_COPY = (DWORD)&W_copy;
+            *(volatile DWORD*)iat_copy = (DWORD)&W_copy;
             LG("probe installed on string-copy import");
         }
-        cur = *(volatile DWORD*)IAT_COPYEX;
+        cur = *(volatile DWORD*)iat_copyex;
         if (cur != IAT_COPYEX_EXPECT) LG("copyex probe skipped: IAT slot holds %08lx, expected %08lx", cur, IAT_COPYEX_EXPECT);
         else {
             g_copyex_orig = (CopyExFn)cur;
-            *(volatile DWORD*)IAT_COPYEX = (DWORD)&W_copyex;
+            *(volatile DWORD*)iat_copyex = (DWORD)&W_copyex;
             LG("probe installed on string-copy-ex import (log only)");
         }
     }
@@ -299,9 +313,52 @@ __declspec(dllexport) int RtlFlipInstall(void) {
             LG("prop hook rc=%d flip=%d", rc, g_prop_flip);
         }
     }
+    g_init_status = 1;
     t = CreateThread(NULL, 0, Disarm, NULL, 0, NULL);
     if (t) CloseHandle(t); else LG("WARNING: no disarm thread; armed flag stays, next boot will be inert");
     return 0;
+}
+
+/* On-device control: the manifest declares a quick-settings tile (setting/hebrew-rtl/reset + status/hebrew-rtl/state).
+ * Switching it on clears rtlflip.tripped (and the unstable-boot counter) so the next boot installs the hooks again; no computer needed. */
+#define K_SET  "setting/hebrew-rtl/reset"
+#define K_STAT "status/hebrew-rtl/state"
+static DWORD WINAPI Watch(LPVOID p) {
+    HANDLE ev; int i, cur = g_init_status;
+    (void)p;
+    ev = lyra_state_change_event(L"zune-mod-state-evt-hebrew-rtl");
+    for (i = 0; i < 60 && lyra_state_get(K_SET) < 0; i++) Sleep(500);      /* the slot exists once the platform applied the mod */
+    lyra_state_set_status(K_STAT, cur);
+    for (;;) {
+        if (ev) WaitForSingleObject(ev, 5000); else Sleep(2000);
+        if (lyra_state_get(K_SET) == 1) {
+            int was_tripped = exists(F_TRIPPED);
+            DeleteFileW(F_TRIPPED);
+            if (!was_tripped) was_tripped = exists(F_HUD_TRIPPED);
+            DeleteFileW(F_HUD_TRIPPED);
+            if (exists(F_ARMED)) write_count(F_ARMED, 0);
+            LG("reset requested from the Zune tile: tripped=%d cleared, counter reset", was_tripped);
+            lyra_state_set_setting(K_SET, 0);                              /* behave like a button */
+            if (was_tripped) { cur = 3; lyra_state_set_status(K_STAT, cur); }
+        }
+    }
+    return 0;
+}
+
+__declspec(dllexport) int RtlFlipInstall(void) {
+    int rc = Install_impl(0);
+    HANDLE t = CreateThread(NULL, 0, Watch, NULL, 0, NULL);
+    if (t) CloseHandle(t);
+    return rc;
+}
+
+/* Loaded into servicesd (the HUD / quick settings host) by a second load_module action. Own stage and guard files (rtlflip.hud.*). */
+__declspec(dllexport) int RtlFlipInstallHud(void) {
+    g_fstage   = DIR L"rtlflip.hud.stage";
+    g_farmed   = DIR L"rtlflip.hud.armed";
+    g_ftripped = DIR L"rtlflip.hud.tripped";
+    g_tag      = "[HUD] ";
+    return Install_impl(1);
 }
 
 BOOL WINAPI DllMain(HANDLE h, DWORD r, LPVOID l) { (void)h; (void)r; (void)l; return TRUE; }

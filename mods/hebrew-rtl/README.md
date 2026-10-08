@@ -5,7 +5,7 @@ reordered before it is drawn: whole line reversed, runs of Latin letters and dig
 Pair it with the `hebrew-font` mod (which provides the letters).
 
 ## Status
-Works on a device (checked by eye on the screens tried: Now Playing, the next-songs queue, the songs list, Albums and Artists lists, hub tiles).
+Works on a device (checked by eye on the screens tried: Now Playing, the next-songs queue, the songs list, Albums and Artists lists, hub tiles, and the quick settings view).
 Not exhaustively tested. Hebrew text that does not come from the media library (for example file names or settings) is left alone on purpose.
 Known limitation: Hebrew text that **wraps onto several lines** (for example a long album name in a narrow tile) comes out with its lines in the wrong order, because the string is reversed as a whole before the UI wraps it. Fixing that needs the flip to happen per drawn line.
 Known cosmetic issue: the log line `prop-flip #1 ...` can repeat (the counter it prints only advances on real flips).
@@ -15,6 +15,10 @@ Known cosmetic issue: the log line `prop-flip #1 ...` can repeat (the counter it
   `GetStr(obj, propId, buf, cch, extra)` with `propId` 0x20001 = title, 0x20002 = artist, 0x20003 = album. The mod detours it and, after the call,
   flips the returned string **in place** for those three ids when it contains Hebrew. That one point covers every list.
 - **Labels.** `SetLabelText` (`gemstone+0x38434`) is also detoured, for text that does not come from the getter.
+- **Quick settings / HUD.** That view is drawn by another process, `servicesd` (`zhud_serv.dll`, base `0x419b0000`). A second `lyra.load_module` action loads the same DLL there
+  (entry `RtlFlipInstallHud`). Its label setter is the same code at `0x419c6a14` (first words identical, checked on a device dump). Only `servicesd` maps that code,
+  so patching it cannot reach other processes. The HUD instance has its own stage file and guard files (`rtlflip.hud.*`), default stage `A` (nothing); set `C` to flip labels.
+  Do **not** code-patch `xuidll`: it is a ROM library shared by several processes while the hook code lives in one of them.
 - **Copy sites.** The string copies that build row text (coredll `StringCchCopyW`/`StringCchCopyExW`, `gemstone` import slots `0x962a8` and `0x96228`) are wrapped
   by swapping the import-table pointer (no code patching, all arguments forwarded). They flip only at allow-listed call sites (`ROW_LR`, `EXROW_LR`),
   because the same routines also copy file names and ids that must never be reordered. With the getter flip these are belt and braces.
@@ -24,13 +28,14 @@ Known cosmetic issue: the log line `prop-flip #1 ...` can repeat (the counter it
 - Flipped text goes into permanent buffers, so no pointer can dangle.
 
 ## Stages and safety
-Write one letter into `\flash2\automation\rtlflip.stage` (default `A`):
+Write one letter into `\flash2\automation\rtlflip.stage` for the UI process, and into `\flash2\automation\rtlflip.hud.stage` for the HUD process (default `A`; the HUD only understands `A`, `B`, `C` and `P`):
 `A` guard only, nothing patched; `B` label hook, text unchanged; `C` label hook, flips; `P` = C plus a log-only probe of the two copy routines;
 `R` = P plus flipping at the allow-listed copy sites; `Q` = R plus a log-only hook on the getter; **`G` = Q plus flipping in the getter (the complete fix)**.
 Before patching, the mod writes `rtlflip.armed` (one byte: how many unstable boots in a row it has seen) and deletes it after 3 minutes of uptime.
 If the file is still there at the next load, the previous boot ended inside that window (a crash, or just a restart); the counter goes up and the hooks are installed again.
 After **5 unstable boots in a row** no hook is installed and the file becomes `rtlflip.tripped`; delete that file to re-enable. A boot that stays up 3 minutes resets the count.
-Log: `\flash2\automation\rtlflip.log`. Recovery routes: `docs/LESSONS.md`.
+Reset without a computer: the mod adds a quick-settings tile, "Hebrew direction: reset guard", whose status line shows `Off` / `Active` / `Tripped: tap to reset` / `Reset: restart`; switching it on clears both tripped flags.
+Log: `\flash2\automation\rtlflip.log` (lines from the HUD process start with `[HUD]`). Recovery routes: `docs/LESSONS.md`.
 
 ## Finding more call sites
 Run stage `Q`, use the screens that are still reversed, read the log: `copy`/`copyex`/`prop` lines give the caller address (`lr=`), the property id and the Hebrew text.

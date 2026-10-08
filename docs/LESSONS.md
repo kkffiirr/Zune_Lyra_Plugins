@@ -51,6 +51,7 @@
   what you already transformed, or a string copied twice is transformed twice.
 - **Find the real text source with a log-only probe.** The media library's title/artist/album come from one getter (`gemstone+0x748d0`, property ids 0x20001/2/3), not from the
   copy routines the row code appears to use; flipping there fixed every list at once. Probe callers and ids first, change nothing, then act on the one choke point.
+- **The UI is several processes.** The quick settings / HUD view is drawn by `servicesd` (`zhud_serv.dll` at `0x419b0000`), not by `gemstone`. A mod that hooks only gemstone never touches it. Load the same DLL into `servicesd` with a second `lyra.load_module` action; give each process its own guard files. Before patching code in a shared ROM library (`xuidll`), check which processes map it: a hook stub that lives in one process crashes the others.
 - **A boot guard beats Lyra's boot ladder for late crashes:** create a flag file before patching and delete it after N minutes of uptime; if it is still there at the next load, count an unstable boot and skip the hooks once the count reaches a limit (5 in `hebrew-rtl`; a limit of 1 switched the fix off whenever another test restarted the device).
 
 ## Tooling quirks

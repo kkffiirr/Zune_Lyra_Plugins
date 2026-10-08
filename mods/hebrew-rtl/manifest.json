@@ -1,11 +1,11 @@
 {
   "mod_id": "hebrew-rtl",
   "name": "Hebrew Text Direction",
-  "version": "0.10.0",
+  "version": "0.12.0",
   "author": "Gilad",
   "category": "Appearance",
-  "description": "Shows Hebrew in reading order in Now Playing, the queue, and the songs, albums and artists lists. Works with the Hebrew Font mod. Firmware 4.5 only. Staged, with a self-disarming boot guard.",
-  "changelog": "0.10: guard tolerates up to five consecutive unstable boots before going inert (random reboots no longer switch it off).",
+  "description": "Shows Hebrew in reading order in Now Playing, the queue, the songs/albums/artists lists and the quick settings view. Works with the Hebrew Font mod. Firmware 4.5 only. Staged, with a self-disarming boot guard and an on-device reset tile.",
+  "changelog": "0.12: also loads into servicesd (quick settings / HUD host) with its own stage and guard files. 0.11: quick-settings tile to reset a tripped guard. 0.10: guard tolerates five unstable boots.",
   "requires": [
     "lyra.mod_runtime"
   ],
@@ -15,6 +15,34 @@
       "target_proc": "gemstone",
       "module_ref": "@/rtlflip.dll",
       "init": "RtlFlipInstall"
+    },
+    {
+      "type": "lyra.load_module",
+      "target_proc": "servicesd",
+      "module_ref": "@/rtlflip.dll",
+      "init": "RtlFlipInstallHud"
+    }
+  ],
+  "settings": [
+    {
+      "id": "reset",
+      "type": "bool",
+      "label": "Hebrew direction: reset guard",
+      "default": false,
+      "persist": false,
+      "quick_toggle": true,
+      "status": "state"
+    }
+  ],
+  "status": [
+    {
+      "id": "state",
+      "states": [
+        "Off",
+        "Active",
+        "Tripped: tap to reset",
+        "Reset: restart"
+      ]
     }
   ]
 }
