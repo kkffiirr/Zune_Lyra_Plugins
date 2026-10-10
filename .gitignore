@@ -13,3 +13,4 @@ gems/
 *.log
 __pycache__/
 *.pyc
+mods/scummvm/tools/load_games_state.json

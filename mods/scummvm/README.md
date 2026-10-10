@@ -147,6 +147,21 @@ GPU through `ZDKGL_*`, touch comes from `ZDKInput_GetState`, and nothing freezes
 * For a clean exit use the PC-launched, framebuffer build instead (`lyra-plugin-daemon.py spawn <ip> <dll> --entry RunDaemon
   --arg "comi|\flash2\scummvm\games\comi"`, stop with the daemon's `stop`).
 
+## Loading games onto the Zune (easy way)
+
+Double-click **`Load games to the Zune.bat`** (or drag a game onto it). It needs only Python 3 and the Zune awake on the same
+Wi-Fi as the PC (it uses Project Lyra's daemon, so Lyra must be installed on the Zune). It accepts a **game folder, a disc
+image (`.iso`/`.bin`/`.cue`) or a `.zip`**, including multi-disc games (give every disc in the same run), works out which
+game it is, shows what it found and what is missing, finds the Zune by itself, and uploads into `\flash2\scummvm\games\<id>`.
+Uploads resume if the Zune drops off Wi-Fi (keep its screen on); finished files are skipped on a re-run.
+
+    python tools/load_games.py "D:\Games\Curse of Monkey Island.zip"      # or several paths, --list to only look, --ip to skip the search
+
+Supported ids: `tentacle` (Day of the Tentacle: `TENTACLE.000/.001` + `MONSTER.SOU` for speech), `samnmax` (Sam & Max Hit the
+Road: `SAMNMAX.000/.001` + `MONSTER.SOU`), `comi` (The Curse of Monkey Island: `COMI.LA0/1/2` + the `RESOURCE` folder from both
+discs, about 1 GB). The ScummVM tile's game list is built from these three folders at start-up. Games are your own copies; none
+are included.
+
 ## Licence
 
 ScummVM is GPL-2.0-or-later; `scummvm-zune-port.patch` is a derivative of ScummVM and is under the same licence.
