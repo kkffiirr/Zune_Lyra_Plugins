@@ -118,6 +118,35 @@ against `bcef809e61` (apply it *instead of* `scummvm-zune-port.patch`, not on to
 * Without the Apps tile you can still start it from the PC: `lyra-plugin-daemon.py spawn <ip> <dll> --entry RunDaemon
   --arg "comi|\flash2\scummvm\games\comi"`.
 
+## OpenZDK (GPU) build: "ScummVM ZDK" tile
+
+`scummvm-zune-port-zdk.patch` (a full diff against `bcef809e61`, apply it instead of the other patches) replaces the Lyra
+kernel framebuffer write and the servicesd touch reader with OpenZDK: the frame is uploaded as a texture and drawn by the
+GPU through `ZDKGL_*`, touch comes from `ZDKInput_GetState`, and nothing freezes the Zune shell. Everything is loaded from
+`zdksystem.dll` at run time, so no OpenZDK import libraries are needed to build it with CeGCC.
+
+* **Programs:** `native/scummvmzdk.cpp` is the host the tile starts (`\flash2\scummvm\scummvmzdk.exe`); it loads
+  `\flash2\scummvm\scummvm-zdk.dll` (the patched build, renamed) and runs its `RunDaemon`. `tools/make_zdk_kit.py` turns the normal tile's
+  launcher into the ZDK tile's (same-length rename of the target path inside `exploiter.exe`); `deploykit-zdk/application.cfg`
+  gives it its own GUID so both tiles can be installed. `zdk.ini.example` (copy to `\flash2\scummvm\zdk.ini`) holds run-time switches.
+* **Shaders:** `zdk-shaders/` (GPU shaders must be compiled ahead of time; see the README there).
+* **Build/config:** as above but `--enable-engine=scumm,scumm-7-8`; the backend reads `\flash2\scummvm\zdk.ini` on every launch.
+
+**What was learned (on firmware 4.5):**
+
+* `ZDKDisplay_*` (the 2D sprite API in the OpenZDK headers) is a dead end: `ZDKDisplay_Initialize` is really the media-notify
+  init, the second frame hangs, and it cannot coexist with `ZDKGL_*`. The GL path (`ZDKGL_Initialize`, shaders from
+  `glShaderBinary`, attach the shaders *before* loading the binaries) works.
+* `ZDKInput` delivers touch only inside the XNA tile's process. Started from the PC through the Lyra daemon, no touch
+  arrives anywhere after `ZDKGL_Initialize`, and the Zune shell's own touch stays dead until a restart.
+* **Quitting the tile restarts the Zune**, and this cannot be fixed from inside the app. An empty program exits cleanly
+  (the shell, `gemstone.exe`, is not running inside an XNA tile and can be restarted with `CreateProcess`), but as soon as
+  the GPU session has been used the system restarts the device when the launcher exits, whatever the order of
+  `ZDKGL_Cleanup`, the splash screen and restarting the shell. `scummvmzdk.cpp` has test modes (`\flash2\scummvm\zdk-test.txt`: 1 exit at
+  once, 2 GL only, 3 restore the shell only, 4 input only, 5 audio only, 6/7 GL with other shutdown orders) used to find this.
+* For a clean exit use the PC-launched, framebuffer build instead (`lyra-plugin-daemon.py spawn <ip> <dll> --entry RunDaemon
+  --arg "comi|\flash2\scummvm\games\comi"`, stop with the daemon's `stop`).
+
 ## Licence
 
 ScummVM is GPL-2.0-or-later; `scummvm-zune-port.patch` is a derivative of ScummVM and is under the same licence.
