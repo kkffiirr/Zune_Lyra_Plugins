@@ -151,16 +151,22 @@ GPU through `ZDKGL_*`, touch comes from `ZDKInput_GetState`, and nothing freezes
 
 Double-click **`Load games to the Zune.bat`** (or drag a game onto it). It needs only Python 3 and the Zune awake on the same
 Wi-Fi as the PC (it uses Project Lyra's daemon, so Lyra must be installed on the Zune). It accepts a **game folder, a disc
-image (`.iso`/`.bin`/`.cue`) or a `.zip`**, including multi-disc games (give every disc in the same run), works out which
-game it is, shows what it found and what is missing, finds the Zune by itself, and uploads into `\flash2\scummvm\games\<id>`.
+image (`.iso`/`.bin`/`.cue`) or a `.zip`**, including multi-disc games (give every disc in the same run), recognises the game,
+shows what it found and what is missing, finds the Zune by itself, and uploads into `\flash2\scummvm\games\<game id>`.
 Uploads resume if the Zune drops off Wi-Fi (keep its screen on); finished files are skipped on a re-run.
 
-    python tools/load_games.py "D:\Games\Curse of Monkey Island.zip"      # or several paths, --list to only look, --ip to skip the search
+    python tools/load_games.py "D:\Games\Curse of Monkey Island.zip"      # or several paths; --list only looks, --ip skips the search
 
-Supported ids: `tentacle` (Day of the Tentacle: `TENTACLE.000/.001` + `MONSTER.SOU` for speech), `samnmax` (Sam & Max Hit the
-Road: `SAMNMAX.000/.001` + `MONSTER.SOU`), `comi` (The Curse of Monkey Island: `COMI.LA0/1/2` + the `RESOURCE` folder from both
-discs, about 1 GB). The ScummVM tile's game list is built from these three folders at start-up. Games are your own copies; none
-are included.
+**Every SCUMM game this ScummVM build can run is recognised**, the way ScummVM itself does it: the detection file names plus the MD5
+of the main data file, checked against ScummVM's own table of known versions (`tools/scumm_detect.json`, generated from ScummVM's
+sources by `tools/make_scumm_detect.py`). That covers Maniac Mansion, Zak McKracken, Indiana Jones and the Last Crusade / Fate of
+Atlantis, Loom, The Secret of Monkey Island, Monkey Island 2, Day of the Tentacle, Sam & Max Hit the Road, Full Throttle, The Dig,
+The Curse of Monkey Island, and the early Humongous titles (v6). The Humongous Entertainment games from 1996 on (HE 71 and later) are
+not in this build. Only game files are sent (not installers, DirectX or manuals). An unknown version that several games could own is
+reported and you pick the game; speech/music files and multi-disc sets are warned about when something is missing.
+
+On the Zune, the ScummVM launcher now lists **every folder under `\flash2\scummvm\games`**; each folder is named after the ScummVM game id, which
+the loader does for you (you can also copy a game there yourself). Games are your own copies; none are included.
 
 ## Licence
 

@@ -1257,10 +1257,10 @@ index 0000000000..8fe5757fce
 +#endif
 diff --git a/backends/platform/zune/zune.cpp b/backends/platform/zune/zune.cpp
 new file mode 100644
-index 0000000000..681ff20c08
+index 0000000000..ade5e00704
 --- /dev/null
 +++ b/backends/platform/zune/zune.cpp
-@@ -0,0 +1,688 @@
+@@ -0,0 +1,692 @@
 +// ScummVM backend for the Zune HD, running as a Lyra plugin DLL inside the daemon (nativeapp.exe).
 +// Hardware paths (all proven by spikes): framebuffer write via lyra_kcall, touch read from servicesd's
 +// ci3 ring, audio via WaveOut. WinCE ignores CreateThread stack sizes (64KB), so engine code runs on a
@@ -1854,18 +1854,22 @@ index 0000000000..681ff20c08
 +	HANDLE f = CreateFileW(L"\\flash2\\scummvm\\scummvm.ini", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 +	if (f != INVALID_HANDLE_VALUE) {
 +		// Every game whose data is present under games\<id>\ shows up in the launcher.
-+		static const char *known[][2] = { { "tentacle", "TENTACLE.000" }, { "samnmax", "SAMNMAX.000" }, { "comi", "COMI.LA0" } };
-+		const int NKNOWN = 3;
-+		char ini[2400];
++		char ini[8192];
 +		int n = sprintf(ini, "[scummvm]\nsavepath=\\flash2\\scummvm\\saves\nmusic_driver=adlib\n\n");
 +		bool listed = false;
-+		for (int i = 0; i < NKNOWN; i++) {
-+			char gp[300]; WCHAR wp[320];
-+			sprintf(gp, "\\flash2\\scummvm\\games\\%s\\%s", known[i][0], known[i][1]);
-+			MultiByteToWideChar(CP_ACP, 0, gp, -1, wp, 320);
-+			if (GetFileAttributesW(wp) == 0xFFFFFFFFu) continue;
-+			n += sprintf(ini + n, "[%s]\ngameid=%s\npath=\\flash2\\scummvm\\games\\%s\nlanguage=en\nplatform=pc\n\n", known[i][0], known[i][0], known[i][0]);
-+			if (!strcmp(known[i][0], gameid)) listed = true;
++		// Every folder under games is a ScummVM game id (the PC loader names them that way); each shows up in the launcher.
++		WIN32_FIND_DATAW fd;
++		HANDLE hf = FindFirstFileW(L"\\flash2\\scummvm\\games\\*", &fd);
++		if (hf != INVALID_HANDLE_VALUE) {
++			do {
++				char nm[64];
++				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == L'.') continue;
++				if (!WideCharToMultiByte(CP_ACP, 0, fd.cFileName, -1, nm, sizeof nm, NULL, NULL)) continue;
++				if (n > (int)sizeof ini - 400) break;
++				n += sprintf(ini + n, "[%s]\ngameid=%s\npath=\\flash2\\scummvm\\games\\%s\nlanguage=en\n\n", nm, nm, nm);
++				if (!strcmp(nm, gameid)) listed = true;
++			} while (FindNextFileW(hf, &fd));
++			FindClose(hf);
 +		}
 +		if (autostart && !listed)   // an explicitly requested game outside the scanned list
 +			n += sprintf(ini + n, "[%s]\ngameid=%s\npath=%s\nlanguage=en\nplatform=pc\n\n", gameid, gameid, path);

@@ -8,26 +8,48 @@
            --yes       do not ask for confirmation         --force      upload again even if done before
            --temp DIR  where to unpack .zip files (needs free disk space)
 
-The Zune must be awake, on the same Wi-Fi as this PC, and running Project Lyra (its daemon listens on port 1337).
-Games land in \\flash2\\scummvm\\games\\<id>\\ (ids: tentacle, samnmax, comi). Uploads resume if the link drops.
+Any SCUMM game ScummVM can run in this build is recognised the way ScummVM does it (file names + MD5 of the main data
+file, from scumm_detect.json): Maniac Mansion, Zak McKracken, Indiana Jones 3 and 4, Loom, Monkey Island 1 and 2,
+Day of the Tentacle, Sam & Max, Full Throttle, The Dig, The Curse of Monkey Island and more.
+The Zune must be awake on the same Wi-Fi as this PC and running Project Lyra (its daemon listens on port 1337).
+Each game goes to \\flash2\\scummvm\\games\\<ScummVM game id>\\ ; the ScummVM tile lists every folder there.
+Uploads resume if the link drops.
 """
-import argparse, concurrent.futures as cf, json, os, shutil, socket, struct, sys, tempfile, time, zipfile
+import argparse, concurrent.futures as cf, hashlib, json, os, re, shutil, socket, struct, sys, tempfile, time, zipfile
 
 PORT, CHUNK = 1337, 16384
 BS = chr(92)
 ROOT = BS + "flash2" + BS + "scummvm" + BS + "games"
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, "load_games_state.json")
+MD5_LIMIT = 1024 * 1024                     # ScummVM hashes the first 1 MB of the detection file
 
-# id -> title, files that must exist (all), optional files, extra folder (copied whole, keeping its name)
-GAMES = {
-    "tentacle": dict(title="Day of the Tentacle", need=["TENTACLE.000", "TENTACLE.001"], want=["MONSTER.SOU"], folder=None,
-                     note="speech needs MONSTER.SOU (MONSTER.SOF, the FLAC version, is not supported)"),
-    "samnmax": dict(title="Sam & Max Hit the Road", need=["SAMNMAX.000", "SAMNMAX.001"], want=["MONSTER.SOU"], folder=None,
-                    note="speech needs MONSTER.SOU"),
-    "comi": dict(title="The Curse of Monkey Island", need=["COMI.LA0", "COMI.LA1", "COMI.LA2"], want=[], folder="RESOURCE",
-                 note="needs both discs (COMI.LA1 is on disc 1, COMI.LA2 on disc 2) and their RESOURCE folders"),
+# Files a game cannot run without (warn if absent). Anything else is optional (speech, music, videos).
+REQUIRED = {
+    "tentacle": ["TENTACLE.000", "TENTACLE.001"], "samnmax": ["SAMNMAX.000", "SAMNMAX.001"],
+    "comi": ["COMI.LA0", "COMI.LA1", "COMI.LA2"], "ft": ["FT.LA0", "FT.LA1"], "dig": ["DIG.LA0", "DIG.LA1"],
+    "monkey": ["MONKEY.000", "MONKEY.001"], "monkey2": ["MONKEY2.000", "MONKEY2.001"],
+    "atlantis": ["ATLANTIS.000", "ATLANTIS.001"],
 }
+NOTES = {"tentacle": "speech needs MONSTER.SOU (MONSTER.SOF, the FLAC version, is not supported)",
+         "samnmax": "speech needs MONSTER.SOU", "comi": "needs both discs (COMI.LA1 is on disc 1, COMI.LA2 on disc 2)"}
+# game data worth sending; everything else on a disc (installers, DirectX, manuals...) is left behind
+DATA_EXT = {".lfl", ".sou", ".sog", ".sof", ".bun", ".san", ".nut", ".tab", ".d64", ".dsk", ".prg", ".mp3", ".ogg", ".flac"}
+DATA_RE = re.compile(r"[.](\d{3}|la\d)$", re.I)             # .000 .001 .LA0 .LA1
+SKIP_DIRS = {"directx", "drivers", "install", "setup", "support", "manual", "docs", "extras", "bonus", "autorun"}
+
+DETECT = json.load(open(os.path.join(HERE, "scumm_detect.json")))
+MD5 = {}
+for row in DETECT["md5"]:
+    MD5.setdefault(row[0], row)
+
+
+def is_data(rel):
+    parts = rel.replace(chr(92), "/").split("/")
+    if any(p.lower() in SKIP_DIRS for p in parts[:-1]):
+        return False
+    name = parts[-1]
+    return os.path.splitext(name)[1].lower() in DATA_EXT or bool(DATA_RE.search(name))
 
 
 # ------------------------------------------------------------------ sources: folders, disc images, zips
@@ -86,6 +108,19 @@ class DiscImage:
             i += n
 
 
+def file_reader(path):
+    def read(offset, n):
+        with open(path, "rb") as f:
+            f.seek(offset)
+            return f.read(n)
+    return read
+
+
+def entries_from_image(path):
+    img = DiscImage(path)
+    return [Entry(path, rel, ln, (lambda o, n, lba=lba, ln=ln: img.read(lba, ln, o, n))) for rel, lba, ln in img.walk()]
+
+
 def entries_from_folder(root):
     out = []
     for d, _, files in os.walk(root):
@@ -101,25 +136,12 @@ def entries_from_folder(root):
     return out
 
 
-def file_reader(path):
-    def read(offset, n):
-        with open(path, "rb") as f:
-            f.seek(offset)
-            return f.read(n)
-    return read
-
-
-def entries_from_image(path):
-    img = DiscImage(path)
-    return [Entry(path, rel, ln, (lambda o, n, lba=lba, ln=ln: img.read(lba, ln, o, n))) for rel, lba, ln in img.walk()]
-
-
 def entries_from_zip(path, temp):
     dest = os.path.join(temp, os.path.splitext(os.path.basename(path))[0])
     print(f"  unpacking {os.path.basename(path)} (needs free disk space) ...")
     with zipfile.ZipFile(path) as z:
         z.extractall(dest)
-    return collect(dest, temp)
+    return entries_from_folder(dest)
 
 
 def collect(path, temp):
@@ -140,49 +162,90 @@ def collect(path, temp):
     raise ValueError("not a folder, disc image or zip")
 
 
-# ------------------------------------------------------------------ recognising games
-def find_games(entries):
-    """Returns {id: (files, problems)} with files = [(remote relative path, Entry)]."""
-    by_name = {}
+# ------------------------------------------------------------------ recognising games (port of ScummVM's SCUMM detector)
+def detection_name(pattern, gen, platform):
+    if gen in ("kGenDiskNum", "kGenRoomNum"):
+        return pattern % 0
+    if gen in ("kGenDiskNumSteam", "kGenRoomNumSteam"):
+        return DETECT["steam"].get(pattern.lower() + "|" + platform)
+    if gen in ("kGenHEPC", "kGenHEIOS"):
+        return pattern + ".he0"
+    if gen == "kGenHEMac":
+        return pattern + " (0)"
+    if gen == "kGenHEMacNoParens":
+        return pattern + " 0"
+    return pattern                                               # kGenUnchanged
+
+
+def md5_of(e):
+    return hashlib.md5(e.read(0, MD5_LIMIT)).hexdigest()
+
+
+def add_game(games, entries, src, d, gid, exact, info):
+    g = games.setdefault(gid, dict(title=DETECT["titles"].get(gid, gid), files=[], seen={}, exact=exact, info=info, problems=[]))
+    g["exact"] = g["exact"] and exact
+    prefix = d + "/" if d else ""
     for e in entries:
-        by_name.setdefault(e.rel.split("/")[-1].upper(), []).append(e)
-    found = {}
-    for gid, g in GAMES.items():
-        if not all(n in by_name for n in g["need"]) and not any(n in by_name for n in g["need"]):
+        if e.src != src or not e.rel.startswith(prefix):
             continue
-        files, problems, seen = [], [], {}
-        def add(rel, e):
-            key = rel.upper()
-            if key in seen:
-                if seen[key].size != e.size:
-                    problems.append(f"{rel}: two different copies (sizes {seen[key].size} and {e.size}); using the first")
-                return
-            seen[key] = e
-            files.append((rel, e))
-        for n in g["need"]:
-            if n in by_name:
-                add(by_name[n][0].rel.split("/")[-1], by_name[n][0])
-        srcs = {e.src for e in seen.values()}
-        for n in g["want"]:
-            cands = by_name.get(n, [])
-            same = [e for e in cands if e.src in srcs] or cands
-            if same:
-                add(n, same[0])
-        if g["folder"]:
-            for e in entries:
-                parts = e.rel.split("/")
-                if len(parts) >= 2 and parts[-2].upper() == g["folder"]:
-                    add(g["folder"] + "/" + parts[-1], e)
-        for n in g["need"]:
-            if n not in by_name:
-                problems.append(f"missing {n}")
-        for n in g["want"]:
-            if n not in by_name:
-                problems.append(f"no {n} (the game will run, without speech)")
-        found[gid] = (files, problems)
-    if len([g for g in found if "MONSTER.SOU" in GAMES[g]["want"]]) > 1:
-        print("  note: two games here use a file named MONSTER.SOU; if the speech comes out wrong, load them in separate runs.")
-    return found
+        rel = e.rel[len(prefix):]
+        if not is_data(rel):
+            continue
+        key = rel.upper()
+        if key in g["seen"]:
+            if g["seen"][key].size != e.size:
+                g["problems"].append(f"{rel}: two different copies (sizes {g['seen'][key].size} and {e.size}); using the first")
+            continue
+        g["seen"][key] = e
+        g["files"].append((rel, e))
+
+
+def find_games(entries):
+    """Returns (games, unclear). games = {game id: dict(title, files=[(relative path, Entry)], missing, problems, exact)};
+    unclear = [(src, folder, [possible game ids])] for data that several games could own (unknown versions only)."""
+    dirs = {}
+    for e in entries:
+        d, _, name = e.rel.rpartition("/")
+        dirs.setdefault((e.src, d), {})[name.lower()] = e
+    games, unclear, pending = {}, [], []
+    for (src, d), names in dirs.items():
+        verified, guessed = {}, {}                               # guessed: detection file -> {game id: note}
+        for gid, pattern, gen, platform, extra in DETECT["patterns"]:
+            fname = detection_name(pattern, gen, platform)
+            e = names.get((fname or "").lower())
+            if not e:
+                continue
+            if fname.lower().endswith((".d64", ".dsk", ".prg")):
+                guessed.setdefault(fname.lower(), {}).setdefault(gid, extra or "")        # disk images: filename only
+                continue
+            row = MD5.get(md5_of(e))
+            if row:
+                verified[row[1]] = " ".join(x for x in (row[2], row[3]) if x)
+            else:
+                guessed.setdefault(fname.lower(), {}).setdefault(gid, extra or "")
+        if verified:
+            for gid, info in verified.items():
+                pending.append((src, d, gid, True, info))
+            continue
+        for fname, ids in guessed.items():
+            if len(ids) == 1:
+                gid, info = next(iter(ids.items()))
+                pending.append((src, d, gid, False, info))
+            else:
+                unclear.append((src, d, sorted(ids)))
+    for src, d, gid, exact, info in pending:
+        add_game(games, entries, src, d, gid, exact, info)
+    return games, unclear
+
+
+def finish_games(games):
+    for gid, g in games.items():
+        have = {r.upper() for r, _ in g["files"]}
+        g["missing"] = [n for n in REQUIRED.get(gid, []) if n not in have]
+        if not g["exact"]:
+            g["problems"].append("version not in ScummVM's list of known versions; it may still run")
+        if gid in ("tentacle", "samnmax") and "MONSTER.SOU" not in have:
+            g["problems"].append("no MONSTER.SOU (the game will run, without speech)")
 
 
 # ------------------------------------------------------------------ the Zune (Lyra daemon)
@@ -348,22 +411,32 @@ def main():
                 entries += got
             except Exception as ex:
                 print(f"  skipping {p}: {ex}")
-        games = find_games(entries)
+        print("  recognising games ...")
+        games, unclear = find_games(entries)
+        for src, d, ids in unclear:
+            where = os.path.basename(src.rstrip('/' + chr(92))) + ('/' + d if d else '')
+            print(f"\n  '{where}' has SCUMM data, but it is a version I do not know and several games use those file names:")
+            print('   could be: ' + ', '.join(f"{DETECT['titles'].get(i, i)} [{i}]" for i in ids))
+            pick = '' if a.yes else input('   which one is it? type the id (or Enter to skip): ').strip().lower()
+            if pick in ids:
+                add_game(games, entries, src, d, pick, False, '')
+        finish_games(games)
         if not games:
-            print("\nNo supported game found. Supported: " + ", ".join(g["title"] for g in GAMES.values()) + ".")
+            print("\nNo SCUMM game recognised. (This tool handles Lucasfilm/LucasArts SCUMM games: Maniac Mansion, Zak McKracken,")
+            print("Indiana Jones 3/4, Loom, Monkey Island 1/2/3, Day of the Tentacle, Sam & Max, Full Throttle, The Dig, ...)")
             return 1
-        total = 0
-        for gid, (files, problems) in games.items():
-            size = sum(e.size for _, e in files)
-            total += size
-            print(f"\n{GAMES[gid]['title']}  ->  {ROOT}{BS}{gid}   ({len(files)} files, {size / 1e6:.0f} MB)")
-            for pr in problems:
+        for gid, g in games.items():
+            size = sum(e.size for _, e in g["files"])
+            print(f"\n{g['title']}  [{gid}]{'  ' + g['info'] if g['info'] else ''}  ->  {ROOT}{BS}{gid}   ({len(g['files'])} files, {size / 1e6:.0f} MB)")
+            for pr in g["problems"]:
                 print("   !", pr)
-            if any(x.startswith("missing") for x in problems):
-                print("   (" + GAMES[gid]["note"] + ")")
+            for m in g["missing"]:
+                print("   ! missing", m)
+            if g["missing"] and NOTES.get(gid):
+                print("   (" + NOTES[gid] + ")")
         if a.list:
             return 0
-        runnable = {g: v for g, v in games.items() if not any(x.startswith("missing") for x in v[1])}
+        runnable = {k: v for k, v in games.items() if not v["missing"]}
         if not runnable:
             print("\nNothing complete enough to load. Add the missing files / disc and run again.")
             return 1
@@ -379,8 +452,9 @@ def main():
         st = load_state()
         st["last_ip"] = ip
         save_state(st)
-        for gid, (files, _) in runnable.items():
-            print(f"\n== {GAMES[gid]['title']}")
+        for gid, g in runnable.items():
+            files = g["files"]
+            print(f"\n== {g['title']}")
             base = ROOT + BS + gid
             mkdirs(ip, base)
             for sub in sorted({r.rsplit("/", 1)[0] for r, _ in files if "/" in r}):
