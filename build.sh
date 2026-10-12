@@ -33,6 +33,10 @@ case "$mod" in
     cp rtlflip.dll "$OUT/" ;;
   regprobe)
     dll -shared -o regprobe.dll "$ROOT/mods/regprobe/regprobe.c" -lcoredll; cp regprobe.dll "$OUT/" ;;
+  hebrew-keyboard)
+    cp "$ROOT/mods/hebrew-keyboard/kbdheb.c" .; sdk
+    dll $INC -c kbdheb.c -o kh.o
+    dll -shared -o kbdheb.dll kh.o lc.o cl.o -lcoredll -ltoolhelp; cp kbdheb.dll "$OUT/" ;;
   fontprobe)
     dll -shared -o fontprobe.dll "$ROOT/mods/fontprobe/fontprobe.c" -lcoredll; cp fontprobe.dll "$OUT/" ;;
   *) echo "unknown mod: $mod"; exit 2 ;;

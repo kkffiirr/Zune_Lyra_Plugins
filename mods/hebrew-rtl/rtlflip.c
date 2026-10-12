@@ -18,6 +18,7 @@
  * If it still exists at the next load (= the UI died inside that window) no hook is installed, the file is renamed
  * to rtlflip.tripped and the mod stays inert until that file is deleted. */
 #include <windows.h>
+#include <tlhelp32.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include "lyra.h"
@@ -122,7 +123,23 @@ static void log_text(const wchar_t* in, const wchar_t* out) {
     LG("label[%s] in=\"%s\" out=\"%s\"", g_flip ? "flip" : "pass", a, b);
 }
 
+/* the Hebrew Keyboard mod keeps its text box in visual order itself: never flip that one (looked up lazily, kbdheb may load later) */
+static volatile int g_hud;                          /* 1 in servicesd: kbdheb.dll is only mapped there, never call into it from gemstone */
+static volatile int g_ytrows;                        /* rtlflip.ytrows exists: flip the YouTube result rows */
+static volatile int g_ext;                           /* 1 only when \flash2\automation\rtlflip.ext exists: enables the two extras below */
+typedef int (*OwnsFn)(void* elem);
+static OwnsFn g_owns; static volatile LONG g_owns_try;
+static int kbd_owns(void* elem) {
+    if (!g_ext || !g_hud) return 0;
+    if (!g_owns && (InterlockedIncrement(&g_owns_try) & 63) == 1) {
+        HMODULE m = GetModuleHandleW(L"kbdheb.dll");
+        if (m) g_owns = (OwnsFn)GetProcAddressA(m, "KbdHebOwnsElem");
+    }
+    return g_owns && g_owns(elem);
+}
+
 static HRESULT H_label(void* elem, const wchar_t* text) {
+    if (kbd_owns(elem)) return g_next(elem, text);
     if (InterlockedIncrement(&g_n_label) % 300 == 0) LG("stats label=%ld flip=%ld skip=%ld", g_n_label, g_n_flip, g_n_skip);
     if (text && !((DWORD)text & 1)) {
         /* flip only when there is Hebrew; rtl_flip leaves out[] untouched and returns 0 otherwise */
@@ -159,12 +176,43 @@ static void probe(const char* tag, const wchar_t* t, DWORD lr, DWORD cch) {
     u8(t, a, sizeof a);
     LG("%s lr=%08lx cch=%lu in=\"%s\"", tag, lr, cch, a);
 }
+/* the YouTube mod's DLL builds its result rows with the same copy; its load address changes per boot, so match by module range.
+ * The range is found once by a helper thread (never inside the hook: the hot path only compares two numbers). */
+static volatile DWORD g_yt_lo, g_yt_hi;
+static int in_youtube(DWORD lr) { DWORD lo = g_yt_lo; return lo && lr >= lo && lr < g_yt_hi; }
+/* find youtube.dll in this process's module list (GetModuleHandleW by name did not find it) */
+static int yt_scan(DWORD* lo, DWORD* hi, int* nmods) {
+    HANDLE snap; MODULEENTRY32 me; int found = 0;
+    *nmods = 0;
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    me.dwSize = sizeof me;
+    if (Module32First(snap, &me)) do {
+        wchar_t nm[40]; int i;
+        (*nmods)++;
+        for (i = 0; i < 39 && me.szModule[i]; i++) nm[i] = (me.szModule[i] >= L'A' && me.szModule[i] <= L'Z') ? me.szModule[i] + 32 : me.szModule[i];
+        nm[i] = 0;
+        if (wcsstr(nm, L"youtube.dll") && !wcsstr(nm, L"ce_")) { *lo = (DWORD)me.modBaseAddr; *hi = *lo + me.modBaseSize; found = 1; break; }
+    } while (Module32Next(snap, &me));
+    CloseToolhelp32Snapshot(snap);
+    return found;
+}
+static DWORD WINAPI YtFind(LPVOID p) {
+    int n, mods = 0; DWORD lo = 0, hi = 0; (void)p;
+    for (n = 0; n < 200 && !g_yt_lo; n++) {
+        if (yt_scan(&lo, &hi, &mods)) { g_yt_hi = hi; g_yt_lo = lo; LG("youtube.dll range %08lx-%08lx (%d modules)", lo, hi, mods); break; }
+        if (n % 10 == 0) LG("youtube.dll not in module list yet (%d modules, try %d)", mods, n);
+        Sleep(3000);
+    }
+    return 0;
+}
+
 static DWORD W_copy(DWORD dest, DWORD cch, DWORD src) {
     DWORD lr = (DWORD)__builtin_return_address(0);
     probe("copy ", (const wchar_t*)src, lr, cch);
     if (g_row_flip && src && !(src & 1) && src >= 0x10000 && !IsBadReadPtr((void*)src, 2)) {
         int i;
-        for (i = 0; i < (int)(sizeof ROW_LR / sizeof ROW_LR[0]); i++) if (ROW_LR[i] == lr) {
+        for (i = 0; i < (int)(sizeof ROW_LR / sizeof ROW_LR[0]) + 1; i++) if (i < (int)(sizeof ROW_LR / sizeof ROW_LR[0]) ? ROW_LR[i] == lr : (g_ytrows && !g_hud && in_youtube(lr))) {
             const wchar_t* t = (const wchar_t*)src;
             wchar_t* out = g_rowbuf[(InterlockedIncrement(&g_rowring) & 0x7fffffff) % RING];
             if (!memo_has(t) && rtl_flip(t, out, FLIP_MAX) && wcslen(out) < cch) {   /* callee copies at once; output never longer than input */
@@ -270,6 +318,9 @@ static int Install_impl(int hud) {
         LG("previous boot ended inside the %d s window (unstable boot %d of %d tolerated); hooking again", ARM_SECONDS, prev_unstable, MAX_UNSTABLE);
     }
     stage = read_stage();
+    g_hud = hud; g_ext = exists(DIR L"rtlflip.ext"); g_ytrows = exists(DIR L"rtlflip.ytrows");
+    LG("extras: keyboard text box %s, YouTube rows %s", g_ext ? "ON" : "off", g_ytrows ? "ON" : "off");
+    if (g_ytrows && !hud) { HANDLE yt = CreateThread(NULL, 0, YtFind, NULL, 0, NULL); if (yt) CloseHandle(yt); }
     if (hud && (stage == 'R' || stage == 'Q' || stage == 'G')) stage = 'P';   /* the HUD has no allow-listed sites or getter hook yet */
     LG("stage=%c", stage);
     if (stage == 'A') return 0;                    /* guard-only: proves loading + file handling, patches nothing */

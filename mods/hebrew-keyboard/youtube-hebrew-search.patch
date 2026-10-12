@@ -1,0 +1,52 @@
+diff --git a/mods/youtube/src/ytsearchd/ytsearchd.cpp b/mods/youtube/src/ytsearchd/ytsearchd.cpp
+index 2d93be8..4b99a67 100644
+--- a/mods/youtube/src/ytsearchd/ytsearchd.cpp
++++ b/mods/youtube/src/ytsearchd/ytsearchd.cpp
+@@ -27,15 +27,16 @@
+ 
+ CE_LOGGER(L, L"\\flash2\\automation\\ytsearchd.log")
+ 
+-/* narrow a wide query to ASCII for the JSON body (English queries; drop >0x7f). */
++/* wide query -> UTF-8 for the JSON body (Hebrew and other non-ASCII queries must survive). */
+ static void wide_to_ascii(const wchar_t* w, char* out, int cap){
+-    int o=0; for(int i=0; w[i] && o<cap-1; i++){ if((unsigned)w[i]<0x80) out[o++]=(char)w[i]; }
+-    out[o]=0;
++    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, out, cap, NULL, NULL);
++    if(n <= 0) out[0] = 0; else out[cap-1] = 0;
+ }
+-/* widen an ASCII string into a wide field (NUL-terminated, capped). */
++/* UTF-8 result text -> wide field (NUL-terminated, capped). */
+ static void ascii_to_wide(const char* s, wchar_t* out, int cap){
+-    int o=0; for(int i=0; s[i] && o<cap-1; i++) out[o++]=(wchar_t)(unsigned char)s[i];
+-    out[o]=0;
++    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, out, cap);
++    if(n <= 0){ int o=0; for(int i=0; s[i] && o<cap-1; i++) out[o++]=(wchar_t)(unsigned char)s[i]; out[o]=0; }
++    else out[cap-1] = 0;
+ }
+ 
+ /* Build the per-row art cache path `YT_ART_DIR\<id>.jpg`. The id
+@@ -107,7 +108,7 @@ int WINAPI wWinMain(HINSTANCE a,HINSTANCE b,LPWSTR c,int d){
+         long cat = blk->category;
+         long mode = blk->mode;
+         wchar_t q[YT_SEARCH_QUERY_LEN]; wcsncpy(q, blk->query, YT_SEARCH_QUERY_LEN-1); q[YT_SEARCH_QUERY_LEN-1]=0;
+-        char qa[YT_SEARCH_QUERY_LEN]; wide_to_ascii(q, qa, sizeof(qa));
++        char qa[YT_SEARCH_QUERY_LEN*3]; wide_to_ascii(q, qa, sizeof(qa));
+         char bid[YT_SEARCH_ID_LEN]; strncpy(bid, blk->browse_id, YT_SEARCH_ID_LEN-1); bid[YT_SEARCH_ID_LEN-1]=0;
+         static char cont[YT_SEARCH_CONT_LEN];
+         cont[0]=0;
+diff --git a/mods/youtube/src/ce_innertube/ce_innertube.c b/mods/youtube/src/ce_innertube/ce_innertube.c
+index b49f81e..66bdee6 100644
+--- a/mods/youtube/src/ce_innertube/ce_innertube.c
++++ b/mods/youtube/src/ce_innertube/ce_innertube.c
+@@ -55,7 +56,10 @@ static size_t json_str_copy(const char *src, char *out, size_t cap){
+         if(h[0]=='\\' && h[1]=='u' &&
+            hexd(h[2])>=0 && hexd(h[3])>=0 && hexd(h[4])>=0 && hexd(h[5])>=0){
+             int code=(hexd(h[2])<<12)|(hexd(h[3])<<8)|(hexd(h[4])<<4)|hexd(h[5]);
+-            out[o++]=(char)(code&0x7f); h+=6;
++            if(code<0x80) out[o++]=(char)code;                       /* UTF-8, so Hebrew etc. survive */
++            else if(code<0x800 && o+2<cap){ out[o++]=(char)(0xC0|(code>>6)); out[o++]=(char)(0x80|(code&0x3F)); }
++            else if(code>=0x800 && o+3<cap){ out[o++]=(char)(0xE0|(code>>12)); out[o++]=(char)(0x80|((code>>6)&0x3F)); out[o++]=(char)(0x80|(code&0x3F)); }
++            h+=6;
+         } else if(h[0]=='\\' && h[1]=='/'){ out[o++]='/'; h+=2; }
+         else if(h[0]=='\\' && h[1]){ out[o++]=h[1]; h+=2; }
+         else out[o++]=*h++;

@@ -37,6 +37,14 @@ After **5 unstable boots in a row** no hook is installed and the file becomes `r
 Reset without a computer: the mod adds a quick-settings tile, "Hebrew direction: reset guard", whose status line shows `Off` / `Active` / `Tripped: tap to reset` / `Reset: restart`; switching it on clears both tripped flags.
 Log: `\flash2\automation\rtlflip.log` (lines from the HUD process start with `[HUD]`). Recovery routes: `docs/LESSONS.md`.
 
+## Extras (v0.16), off unless their switch file exists
+- `\flash2\automation\rtlflip.ext`: in the HUD process, skip the on-screen keyboard's text box (the `hebrew-keyboard` mod keeps that edit in visual order itself).
+  Asks `KbdHebOwnsElem()` in `kbdheb.dll`; only ever called in `servicesd`.
+- `\flash2\automation\rtlflip.ytrows`: in `gemstone`, also flip the result rows of the YouTube mod. Those rows are copied by `youtube.dll` through the same string copy; the mod flips a copy
+  when the caller's return address is inside `youtube.dll`. The module's address range is looked up once on a helper thread by walking the process module list (`GetModuleHandle` by name did not find it), so the hook itself only compares two numbers.
+  An earlier version read the DLL header inside the hook; that crashed the UI on every screen.
+The log starts with `extras: keyboard text box ON/off, YouTube rows ON/off`, then `youtube.dll range ...` and `row-flip #n at lr=...`.
+
 ## Finding more call sites
 Run stage `Q`, use the screens that are still reversed, read the log: `copy`/`copyex`/`prop` lines give the caller address (`lr=`), the property id and the Hebrew text.
 Check what the caller does (disassemble the dumped `gemstone` image around `lr-4`) before adding it to the allow-list.

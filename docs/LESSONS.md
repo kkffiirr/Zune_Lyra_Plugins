@@ -54,6 +54,14 @@
 - **The UI is several processes.** The quick settings / HUD view is drawn by `servicesd` (`zhud_serv.dll` at `0x419b0000`), not by `gemstone`. A mod that hooks only gemstone never touches it. Load the same DLL into `servicesd` with a second `lyra.load_module` action; give each process its own guard files. Before patching code in a shared ROM library (`xuidll`), check which processes map it: a hook stub that lives in one process crashes the others.
 - **A boot guard beats Lyra's boot ladder for late crashes:** create a flag file before patching and delete it after N minutes of uptime; if it is still there at the next load, count an unstable boot and skip the hooks once the count reaches a limit (5 in `hebrew-rtl`; a limit of 1 switched the fix off whenever another test restarted the device).
 
+## On-screen keyboard and typing (see `mods/hebrew-keyboard`)
+- The keyboard is a HUD scene in `servicesd`; its key letters are a 16-byte-per-key table in `zhud_serv.dll` read-only data (not in any `.gem`). That page is ROM-backed: `VirtualProtect` returns 87, `lyra_patch_code` writes it.
+- A ROM page that is not yet in use can read back as zeros through the read-only process dump when a 16 KB request spans an unreadable page; dump with `--chunk-size 4096` and keep the keyboard open.
+- Do the per-call work of a hook with plain memory reads. API calls (`GetModuleHandle`, header parsing) inside a hook that runs on every string copy crashed the UI on *every* screen. Find modules on a helper thread; walk the module list rather than trusting `GetModuleHandle` by name.
+- Do not call into a mod DLL from a process that never loaded it (the module list shows modules system-wide; only the target process maps the code).
+- Set the guard limit low while testing a risky hook (2), then back to 5. A guard that clears after 2-3 minutes does not count crashes later in the session.
+- The Zune's Wi-Fi sleeps with the screen; a crash-looping Zune is unreachable. Keep the Mods tab as the last-resort off switch, and keep `tools/disable-mod.py` ready.
+
 ## Tooling quirks
 - Shell heredocs/`sed` halve doubled backslashes: write C paths with an editor tool, or use macros like `#define DIR L"\\flash2\\..."`.
 - Old Microsoft installers: XNA Game Studio 3.1 needs C# 2008 Express; XNA setup fails on Windows 10/11 because of the Xbox Live component

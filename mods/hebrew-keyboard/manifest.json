@@ -1,0 +1,12 @@
+{
+  "mod_id": "hebrew-keyboard",
+  "name": "Hebrew Keyboard",
+  "version": "0.3.0",
+  "author": "Gilad",
+  "category": "Appearance",
+  "description": "Hebrew letters on the on-screen keyboard. Firmware 4.5 only. Staged (kbdheb.stage A = read-only check, C = write) with a self-disarming boot guard.",
+  "requires": ["lyra.mod_runtime"],
+  "actions": [
+    { "type": "lyra.load_module", "target_proc": "servicesd", "module_ref": "@/kbdheb.dll", "init": "KbdHebInstall" }
+  ]
+}
